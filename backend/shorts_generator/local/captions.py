@@ -1,8 +1,10 @@
 """Build readable, clip-relative subtitle cues from Whisper word timing."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from pathlib import Path
+
+from ..edit_styles import STYLES
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,8 @@ def _segment_words(segment: dict) -> list[dict]:
     ]
 
 
-def build_cues(segments: list[dict], start: float, end: float) -> list[Cue]:
+def build_cues(segments: list[dict], start: float, end: float, *, editing_style="balanced") -> list[Cue]:
+    profile = STYLES[editing_style]
     words = []
     for segment in segments:
         if segment["end"] <= start or segment["start"] >= end:
@@ -58,9 +61,9 @@ def build_cues(segments: list[dict], start: float, end: float) -> list[Cue]:
     group: list[Word] = []
     for word in words:
         if group and (
-            len(group) >= 7 or word.start - group[-1].end > 0.45
-            or word.end - group[0].start > 3.0
-            or len("".join(token.text for token in group) + word.text) > 34
+            len(group) >= profile.caption_words or word.start - group[-1].end > 0.45
+            or word.end - group[0].start > profile.caption_seconds
+            or len("".join(token.text for token in group) + word.text) > profile.caption_chars
             or (len(group) >= 3 and group[-1].text.rstrip().endswith((".", "!", "?", "。", "؟", "！", "？")))
         ):
             groups.append(group)
@@ -75,6 +78,17 @@ def build_cues(segments: list[dict], start: float, end: float) -> list[Cue]:
         stop = min(next_start, max(word.end for word in group) + 0.15)
         if stop - group[0].start >= 0.02:
             cues.append(Cue(group[0].start, stop, tuple(group)))
+    return cues
+
+
+def build_edited_cues(segments, source_start, pace, editing_style):
+    offset = 0.0
+    cues = []
+    for left, right in pace.spans:
+        for cue in build_cues(segments, source_start + left, source_start + right, editing_style=editing_style):
+            words = tuple(replace(word, start=word.start + offset, end=word.end + offset) for word in cue.words)
+            cues.append(Cue(cue.start + offset, cue.end + offset, words))
+        offset += right - left
     return cues
 
 
@@ -118,12 +132,13 @@ def _ass_text(cue: Cue, style: str) -> str:
     return "".join(chunks)
 
 
-def write_ass(path: Path, cues: list[Cue], style: str, width: int, height: int) -> None:
-    primary = "&H0000D7FF" if style == "highlight" else "&H00FFFFFF"
-    size = max(12, round(min(height * 0.049, width * 0.082)))
+def write_ass(path: Path, cues: list[Cue], style: str, width: int, height: int, *, editing_style="balanced") -> None:
+    profile = STYLES[editing_style]
+    primary = profile.accent if style == "highlight" else "&H00FFFFFF"
+    size = max(12, round(min(height * 0.049, width * 0.082) * profile.caption_scale))
     outline = max(1, round(size * 0.10))
     margin_x = max(6, round(width * 0.075))
-    margin_y = max(8, round(height * 0.14))
+    margin_y = max(8, round(height * profile.caption_margin))
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}

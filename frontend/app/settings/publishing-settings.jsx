@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import Link from "next/link";
-import { Check, Clipboard, Link2, Save } from "lucide-react";
+import { Check, Clipboard, ExternalLink, Link2, Save } from "lucide-react";
 import { api, submit } from "../api";
 import { platforms } from "../publish/platforms";
 
@@ -134,6 +134,15 @@ export default function PublishingSettings() {
             <form onSubmit={(event) => save(event, section, fields)}>
               <fieldset className="control-group" disabled={Boolean(busy)}>
                 <legend className="sr-only">{entry.name} developer app</legend>
+                <p className="ai-help">{platform.credentialLocation}</p>
+                <div className="publish-buttons credential-links">
+                  <a className="secondary-button" href={platform.dashboard} target="_blank" rel="noreferrer">
+                    {platform.dashboardLabel} <ExternalLink size={14} aria-hidden="true" />
+                  </a>
+                  <a className="secondary-button" href={platform.prerequisite[1]} target="_blank" rel="noreferrer">
+                    {platform.prerequisite[0]} <ExternalLink size={14} aria-hidden="true" />
+                  </a>
+                </div>
                 <div className="ai-fields">
                   <SetupInput label={platform.idLabel} value={fields.client_id}
                     onChange={(value) => change(section, "client_id", value)} />

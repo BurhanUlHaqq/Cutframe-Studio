@@ -11,6 +11,7 @@ from django.conf import settings
 from filelock import FileLock
 
 from shorts_generator.local.thumbnails import write_thumbnail
+from shorts_generator.publication import description_with_hashtags
 
 
 def job_directory(job_id):
@@ -24,6 +25,21 @@ def publication_filename(title):
     if re.fullmatch(r"CON|PRN|AUX|NUL|(?:COM|LPT)[1-9¹²³]", name.split(".", 1)[0].rstrip(), re.IGNORECASE):
         name = "_" + name
     return name
+
+
+def thumbnail_filename(clip):
+    return clip.get("thumbnail_file") or f"{clip['name']}.jpg"
+
+
+def save_thumbnail_content(files, name, content):
+    revision = hashlib.sha256(content).hexdigest()[:24]
+    target = files / f"{name}-cover-{revision}.jpg"
+    if not target.is_file():
+        with TemporaryDirectory(prefix=".cover-", dir=files) as staging:
+            pending = Path(staging) / target.name
+            pending.write_bytes(content)
+            pending.replace(target)
+    return target.name
 
 
 def clip_text(clip):
@@ -83,7 +99,7 @@ def open_archive(job_id, clips):
                     name = f"{index:02d}/{publication_filename(clip['title'])}"
                     with open_published_video(directory, clip) as video, archive.open(f"{name}.mp4", "w", force_zip64=True) as member:
                         shutil.copyfileobj(video, member, length=1024 * 1024)
-                    archive.write(directory / "files" / f"{clip['name']}.jpg", f"{name}.jpg")
+                    archive.write(directory / "files" / thumbnail_filename(clip), f"{name}.jpg")
                     if clip.get("has_captions"):
                         subtitles = directory / "files" / f"{clip['name']}.srt"
                         archive.write(subtitles, f"{name}.srt")
@@ -101,7 +117,7 @@ def open_archive(job_id, clips):
         return handle
 
 
-def make_export(job, shorts):
+def make_export(job, shorts, *, generate_cover=None):
     """Create a ZIP and a matching set of browser-previewable files."""
     directory = job_directory(job.id)
     files = directory / "files"
@@ -114,10 +130,10 @@ def make_export(job, shorts):
 
         index = len(clips) + 1
         title = " ".join(str(short.get("title") or "").split())[:180] or f"Clip {index}"
-        description = (
-            short.get("description") or short.get("hook_sentence")
-            or short.get("virality_reason") or title
-        ).strip()[:1200]
+        description = next((value.strip() for value in (
+            short.get("description"), short.get("hook_sentence"), short.get("virality_reason"), title,
+        ) if isinstance(value, str) and value.strip()), title)
+        description = description_with_hashtags(description, short.get("hashtags"))
         name = f"clip-{index:02d}"
         video = files / f"{name}.mp4"
         thumbnail = files / f"{name}.jpg"
@@ -144,6 +160,13 @@ def make_export(job, shorts):
         }
         if "chapters" in short:
             metadata.update(chapters=short["chapters"], chapter_text=short["chapter_text"])
+        if short.get("pauses_trimmed"):
+            metadata.update(duration_seconds=short["duration_seconds"], pauses_trimmed=short["pauses_trimmed"])
+        if short.get("thumbnail_options"):
+            metadata["thumbnail_options"] = store_thumbnail_options(files, name, short["thumbnail_options"], work)
+            metadata["thumbnail_design"] = short["thumbnail_design"]
+        if generate_cover is not None:
+            generate_cover(files, metadata, index)
         if short.get("caption_path"):
             subtitles = Path(short["caption_path"]).resolve()
             if not subtitles.is_relative_to(work):
@@ -156,3 +179,28 @@ def make_export(job, shorts):
         raise RuntimeError("No clips rendered successfully.")
     open_archive(job.id, clips).close()
     return clips
+
+
+def store_thumbnail_options(files, name, options, work):
+    stored = []
+    for index, option in enumerate(options):
+        source = Path(option["path"]).resolve()
+        if not source.is_relative_to(work):
+            raise ValueError("Thumbnail frame was rendered outside its job directory.")
+        filename = f"{name}-frame-{index + 1}.jpg"
+        shutil.copyfile(source, files / filename)
+        stored.append({"file": filename, "time": option["time"], "placement": option["placement"]})
+    return stored
+
+
+def thumbnail_reference(files, clip):
+    choices = clip.get("thumbnail_options", [])
+    selected = (clip.get("thumbnail_design") or {}).get("frame", 0)
+    if 0 <= selected < len(choices):
+        return files / choices[selected]["file"]
+    return files / f"{clip['name']}.jpg"
+
+
+def set_ai_thumbnail(files, clip, content, model):
+    clip.update(thumbnail_file=save_thumbnail_content(files, clip["name"], content),
+                thumbnail_source="ai", thumbnail_model=model)

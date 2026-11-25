@@ -14,6 +14,7 @@ import math
 import re
 from typing import Callable, Dict, List, Optional
 
+from .edit_styles import STYLES
 from .local.llm import call_local_llm
 from .publication import publication_copy
 
@@ -46,6 +47,7 @@ HIGHLIGHT_SYSTEM_PROMPT = """You are an elite short-form video editor who has st
 {virality_criteria}
 
 Content type: {content_type} | Density: {density}
+Editing direction: {editing_direction}
 
 Your task: identify the most viral-worthy highlights from the transcript.
 
@@ -64,10 +66,12 @@ Rules:
 - Explain in one sentence why this clip is viral ("virality_reason")
 - Write "title" for a viewer encountering the clip on its own. Use at most 60 characters and name a concrete subject, stakes, or result inside the cut. Avoid vague labels, generic curiosity bait, ALL CAPS, and hashtags.
 - Write "description" as one or two sentences under 300 characters. Establish the subject and add a concrete payoff, takeaway, or detail that the title does not already give. Use only speech within the cut; keep names and numbers faithful to that speech. Write audience-facing copy with no hashtags, calls to action, or explanation of why the clip was picked.
+- In "hashtags", suggest up to five distinct tags for specific topics, games, techniques, or named entities actually present in this clip. Use natural search terms for the intended audience. Skip generic viral or trending tags and unrelated popular topics. Return fewer when the transcript gives limited evidence.
+- Suggest "cover_headline" of two to five short words that identifies the moment at a glance. Use the clip's language and keep it grounded in the actual result or stakes. Leave it blank when a factual short line would be unclear.
 - Write the title and description in the language spoken in that clip. Output plain text without field labels or markdown.
 
 Respond ONLY with valid JSON (no markdown, no explanation):
-{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string","description":"string"}}]}}"""
+{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string","description":"string","cover_headline":"string","hashtags":["TopicName","SpecificTechnique"]}}]}}"""
 
 
 CHUNK_SIZE_SECONDS = 1200       # 20-min chunks for long videos
@@ -132,6 +136,8 @@ def _sanitize_highlights(raw_highlights: object, duration: float, *, require_sco
                 "hook_sentence": str(item.get("hook_sentence") or "").strip(),
                 "virality_reason": str(item.get("virality_reason") or "").strip(),
                 "description": item.get("description"),
+                "cover_headline": item.get("cover_headline"),
+                "hashtags": item.get("hashtags"),
             }
         )
 
@@ -194,6 +200,7 @@ def call_highlight_api(
     llm_fn: LLMFn = call_local_llm,
     clip_length: tuple[int | None, int | None] = (None, None),
     min_viral_score: Optional[int] = None,
+    editing_style: str = "balanced",
 ) -> Dict:
     if min_viral_score is None:
         # Give overlap removal extra candidates while keeping the response small.
@@ -207,11 +214,13 @@ def call_highlight_api(
             'or higher. Apply the score cutoff even for a short source. Return {"highlights":[]} if nothing qualifies.'
         )
     minimum, maximum = clip_length
+    profile = STYLES[editing_style]
+    preferred_min, preferred_max = profile.preferred_seconds
     length_instruction = (
         f"Target durations from {min(minimum or 1, duration):g} to {min(maximum or 180, duration):g} seconds. "
         "Use the available duration when the source is shorter than requested."
         if minimum or maximum else
-        "Prefer 45–90 seconds. Use a shorter span for a tight moment or up to 180 seconds for a complete story."
+        f"Prefer {preferred_min}–{preferred_max} seconds. Finish the thought and use available source time."
     )
     system = HIGHLIGHT_SYSTEM_PROMPT.format(
         virality_criteria=VIRALITY_CRITERIA,
@@ -219,6 +228,7 @@ def call_highlight_api(
         density=content_info.get("density", "medium"),
         selection_instruction=selection_instruction,
         length_instruction=length_instruction,
+        editing_direction=profile.selection or "Choose a strong standalone moment that suits the source.",
     )
     base_prompt = (
         f"{system}\n\n"
@@ -250,7 +260,7 @@ def call_highlight_api(
             prompt = (
                 base_prompt
                 + "\n\nIMPORTANT: Return ONLY valid JSON with a top-level 'highlights' array."
-                + " Each item must include: title, start_time, end_time, score, hook_sentence, virality_reason, description."
+                + " Each item must include: title, start_time, end_time, score, hook_sentence, virality_reason, description, cover_headline, hashtags."
                 + " No markdown fences, no commentary."
             )
 
@@ -367,6 +377,7 @@ def get_highlights(
     clip_length: tuple[int | None, int | None] = (None, None),
     on_section: Optional[Callable[[int, int], None]] = None,
     min_viral_score: Optional[int] = None,
+    editing_style: str = "balanced",
 ) -> Dict:
     """Main entry point — returns {highlights: [...]} sorted by score.
 
@@ -389,7 +400,7 @@ def get_highlights(
                 on_section(i + 1, len(chunks))
             result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips,
                                         is_chunk=True, llm_fn=llm_fn, clip_length=clip_length,
-                                        min_viral_score=min_viral_score)
+                                        min_viral_score=min_viral_score, editing_style=editing_style)
             for h in result.get("highlights", []):
                 h["start_time"] = float(h["start_time"]) + offset
                 h["end_time"] = float(h["end_time"]) + offset
@@ -399,7 +410,8 @@ def get_highlights(
         if on_section is not None:
             on_section(1, 1)
         result = call_highlight_api(text, content_info, duration, num_clips=num_clips,
-                                    llm_fn=llm_fn, clip_length=clip_length, min_viral_score=min_viral_score)
+                                    llm_fn=llm_fn, clip_length=clip_length, min_viral_score=min_viral_score,
+                                    editing_style=editing_style)
         all_highlights = result.get("highlights", [])
 
     return {"highlights": dedupe_highlights(_align_to_speech(all_highlights, transcript, duration, clip_length))}

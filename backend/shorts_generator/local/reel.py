@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 
 from .captions import Cue, build_cues, write_ass, write_srt
-from .thumbnails import write_thumbnail
+from .thumbnails import CoverWindow, create_thumbnail_set
 
 
 SIZES = {"480": (854, 480), "720": (1280, 720), "1080": (1920, 1080)}
@@ -102,13 +102,19 @@ def render_reel(source, work, moments, segments, quality, caption_style, has_aud
         pending.replace(output)
 
     thumbnail = work / "highlights.jpg"
+    report("render", 89, "Preparing thumbnail choices from the selected moments")
+    ranked = sorted(zip(moments, chapters), key=lambda pair: pair[0].score, reverse=True)[:4]
+    windows = [CoverWindow(moment.start, moment.end, chapter["time"], .3 if moment == strongest else 0)
+               for moment, chapter in ranked]
+    cover_title = strongest.title or title
     try:
-        write_thumbnail(source, thumbnail, window=(strongest.start, strongest.end))
+        options, design = create_thumbnail_set(source, thumbnail, windows=windows, aspect_ratio="16:9", title=cover_title)
     except RuntimeError:
-        write_thumbnail(output, thumbnail)
+        options, design = create_thumbnail_set(output, thumbnail, aspect_ratio="16:9", title=cover_title)
     result = {
         "clip_url": str(output), "title": title, "description": description,
         "thumbnail_path": str(thumbnail), "score": None, "start_time": 0, "end_time": total_seconds,
+        "thumbnail_options": options, "thumbnail_design": design,
         "chapters": chapters, "chapter_text": youtube_chapter_text(chapters, total_seconds),
     }
     if captions:

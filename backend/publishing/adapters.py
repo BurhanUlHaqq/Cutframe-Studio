@@ -11,6 +11,7 @@ from .config import PublishError, publishing_settings, seal
 from .http import bearer, read_response, request, upload_url
 from .models import Publication
 from .oauth import graph_base
+from .thumbnails import thumbnail_path, youtube_video_id
 
 
 Status = Publication.Status
@@ -22,14 +23,18 @@ class Result:
     message: str
     url: str = ""
     delay: int = 0
+    thumbnail_state: str = ""
 
 
-def checkpoint(post, data, progress=None):
+def checkpoint(post, data, progress=None, *, url=None):
     post.transfer = seal(data)
     fields = ["transfer", "updated_at"]
     if progress is not None:
         post.progress = progress
         fields.append("progress")
+    if url:
+        post.url = url
+        fields.append("url")
     post.save(update_fields=fields)
 
 
@@ -70,11 +75,60 @@ def youtube_result(response, post):
     if not video.get("id"):
         raise PublishError("YouTube did not confirm a video ID. Check YouTube Studio.", review=True)
     video_id = checked_id(video["id"])
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    if not youtube_video_id(url):
+        raise PublishError("YouTube returned an unexpected video ID. Check YouTube Studio.", review=True)
     privacy = video.get("status", {}).get("privacyStatus", post.options["privacy"])
     if privacy not in {"private", "unlisted", "public"}:
         privacy = post.options["privacy"]
-    return Result(Status.COMPLETE, f"Uploaded to YouTube with {privacy} visibility.",
-                  f"https://www.youtube.com/watch?v={video_id}")
+    if post.options.get("thumbnail_file"):
+        # Persist the video ID before polling or sending an image. A retry only touches this video.
+        state = {"video_id": video_id, "cover_since": timezone.now().timestamp()}
+        checkpoint(post, state, 99, url=url)
+        return Result(Status.PROCESSING, f"Uploaded as {privacy}. Waiting for YouTube to process the video before setting its thumbnail.",
+                      url, delay=15, thumbnail_state="processing")
+    return Result(Status.COMPLETE, f"Uploaded to YouTube with {privacy} visibility. The JPG was unavailable.",
+                  url, thumbnail_state="missing")
+
+
+def youtube_thumbnail(client, post, token, state):
+    video_id = state["video_id"]
+    if video_id != youtube_video_id(post.url):
+        raise PublishError("The recorded YouTube video ID did not match the upload.", review=True)
+    image = thumbnail_path(post.job, post.options.get("thumbnail_file"))
+    if not image or image.stat().st_size > 50_000_000:
+        raise PublishError("The saved JPG is missing or exceeds YouTube's thumbnail limit.")
+
+    headers = bearer(token)
+    response = request(client, "GET", "https://www.googleapis.com/youtube/v3/videos",
+                       params={"id": video_id, "part": "processingDetails,status",
+                               "fields": "items(processingDetails(processingStatus),status(uploadStatus))"},
+                       headers=headers)
+    videos = read_response(response).get("items") or []
+    video = videos[0] if videos else {}
+    processing = video.get("processingDetails", {}).get("processingStatus")
+    upload = video.get("status", {}).get("uploadStatus")
+    if processing in {"failed", "terminated"} or upload in {"failed", "rejected", "deleted"}:
+        return Result(Status.REVIEW, "YouTube reported a problem processing this video. Check it in YouTube Studio.",
+                      post.url, thumbnail_state="failed")
+    if processing != "succeeded" and not (processing is None and upload == "processed"):
+        if timezone.now().timestamp() - state["cover_since"] < 3600:
+            return Result(Status.PROCESSING, "Waiting for YouTube to finish processing the video before setting its thumbnail.",
+                          post.url, delay=30, thumbnail_state="processing")
+        raise PublishError("YouTube has not finished processing the video. Retry the thumbnail when it is ready.")
+
+    with image.open("rb") as handle:
+        size = image.stat().st_size
+        response = request(client, "POST", "https://www.googleapis.com/upload/youtube/v3/thumbnails/set",
+                           params={"videoId": video_id, "uploadType": "media"},
+                           headers={**headers, "Content-Type": "image/jpeg", "Content-Length": str(size)},
+                           content=media_chunks(handle, size))
+    if response.status_code == 403:
+        raise PublishError("YouTube denied the thumbnail. Check the connected channel's custom thumbnail access.")
+    if response.status_code == 400:
+        raise PublishError("YouTube rejected the saved JPG. Check the cover image and try again.")
+    read_response(response)
+    return Result(Status.COMPLETE, "YouTube accepted the custom thumbnail.", post.url, thumbnail_state="applied")
 
 
 def youtube_offset(response, size):
@@ -139,7 +193,8 @@ def tiktok_status(client, token, reference):
 def tiktok_result(data):
     match data.get("status"):
         case "SEND_TO_USER_INBOX":
-            return Result(Status.INBOX, "Open your TikTok inbox to review the draft and post it.")
+            return Result(Status.INBOX, "Open the draft in your TikTok inbox to choose a cover and finish posting.",
+                          thumbnail_state="manual")
         case "PUBLISH_COMPLETE":
             return Result(Status.COMPLETE, "TikTok confirmed the post. Open your TikTok profile to view it.")
         case "FAILED":
@@ -190,10 +245,13 @@ def instagram(client, post, token, file, size, state):
     account_id = checked_id(post.account_id)
     version = publishing_settings().meta_api_version
     base = graph_base(version)
+    cover_time = post.options.get("thumbnail_time_ms")
+    thumbnail_state = "frame" if cover_time is not None else ""
     if not state:
         container = read_response(request(client, "POST", f"{base}/{account_id}/media", headers=headers,
                                           json={"media_type": "REELS", "upload_type": "resumable",
                                                 "caption": post.options["caption"],
+                                                **({"thumb_offset": str(cover_time)} if cover_time is not None else {}),
                                                 **({"is_ai_generated": True} if post.options.get("synthetic") else {})}))
         reference = checked_id(container["id"])
         address = container.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{version}/{reference}"
@@ -202,7 +260,8 @@ def instagram(client, post, token, file, size, state):
     status = read_response(request(client, "GET", f"{base}/{state['id']}", params={"fields": "status_code"},
                                    headers=headers)).get("status_code")
     if status == "PUBLISHED":
-        return Result(Status.COMPLETE, "Instagram confirmed the Reel. Open your Instagram profile to view it.")
+        return Result(Status.COMPLETE, "Instagram confirmed the Reel. Open your Instagram profile to view it.",
+                      thumbnail_state=thumbnail_state)
     if state["step"] == "publishing":
         return pending(post, "Instagram is confirming the Reel.", delay=60)
     if status in {"ERROR", "EXPIRED"}:
@@ -236,4 +295,4 @@ def instagram(client, post, token, file, size, state):
             link = candidate
     except (PublishError, ValueError):
         pass
-    return Result(Status.COMPLETE, "Published to Instagram Reels.", link)
+    return Result(Status.COMPLETE, "Published to Instagram Reels.", link, thumbnail_state=thumbnail_state)

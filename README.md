@@ -11,7 +11,7 @@ Turn YouTube links and local video files into short clips or one highlight reel.
    docker compose up -d --build
    ```
 
-3. Open [Cutframe Studio](http://localhost:5031). Configure a ranking provider under **Settings → AI models** if you plan to use Short Clips or AI transcript selection. Highlights can also run with local visual selection.
+3. Open [Cutframe Studio](http://localhost:5031). Configure a ranking provider under **Settings → AI models** to rank speech with AI. The Gameplay editing style and Highlights with local visual selection run locally.
 
 | Service | Host address |
 | --- | --- |
@@ -52,7 +52,7 @@ The render details page shows the worker's current action above the estimated ov
 
 ## Upload a local video
 
-Choose **Upload video** on the new render page. Short Clips requires an audio track. Highlights accepts silent footage and can select moments by visual activity. Cutframe accepts MP4, MOV, M4V, MKV, WebM, AVI, MPEG, and MPEG transport stream files. Change the default 2 GiB upload limit under **Settings → Storage**. Uploaded sources live in the job’s folder and are reused on retry.
+Choose **Upload video** on the new render page. Speech-based Short Clips styles require an audio track. Gameplay and Highlights can select moments from silent footage. Cutframe accepts MP4, MOV, M4V, MKV, WebM, AVI, MPEG, and MPEG transport stream files. Change the default 2 GiB upload limit under **Settings → Storage**. Uploaded sources live in the job’s folder and are reused on retry.
 
 ## Configure AI models
 
@@ -78,6 +78,18 @@ The feature design draws on OpenShorts. [OpenShorts reference](https://github.co
 
 Face detection runs locally with the bundled YuNet model. [OpenCV YuNet and its license](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
 
+### Editing styles for Short Clips
+
+Choose a style for each render or save it under **Settings → Render defaults**. Explicit clip lengths, framing, and caption settings take precedence.
+
+| Style | Selection and editing |
+| --- | --- |
+| Balanced | Finds self-contained moments with a clear hook and payoff. Uses standard smart framing and caption pacing. |
+| Fast Cuts | Favors quick payoffs, tightens pauses confirmed by audio and transcript timing, and uses shorter caption groups. |
+| Podcast | Preserves conversation context, uses steadier face framing, and levels spoken audio. Removes only longer confirmed pauses. |
+| Gameplay | Ranks sustained motion and audio changes locally. Keeps the main screen visible and moves a detected webcam inset above it. In score mode the threshold uses activity. |
+| Tutorial | Keeps the setup, action, and result together. Smart framing fits the full demonstration on screen. |
+
 ## Assemble a highlight reel
 
 Choose **Highlights** on the new render page and set a maximum of 1–30 minutes. Cutframe assembles one 16:9 MP4, keeps the full frame visible, and preserves the order of the source. The actual runtime depends on the selected moments. **AI transcript** uses your configured ranking model to choose self-contained story beats. **Local visual activity** selects footage by sampled frame changes and works without a ranking provider. Turn captions off to skip Whisper when using local visual activity.
@@ -88,7 +100,13 @@ Use the chapter list to jump to each moment and see its original timestamp. The 
 
 Open a finished render to play each clip and edit or copy its title and description. Download the MP4 by itself or in the ZIP. Both use the saved title as the filename and embed it as MP4 metadata. **Copy title** copies the exact title to paste into YouTube Studio’s Title field.
 
-New renders produce specific titles and short descriptions in the clip's spoken language. Cutframe chooses a sharp, well-exposed frame from the reframed footage before adding captions. Use **JPG** on the clip card to download the cover on its own. [AutoClip title prompt reference](https://github.com/artbyjazi/autoclip/blob/main/backend/autoclip/prompts/highlight_v1.txt)
+New AI-ranked renders produce specific titles, short descriptions, and up to five topic hashtags in the clip's spoken language. Review or edit the description and hashtags before publishing. [AutoClip title prompt reference](https://github.com/artbyjazi/autoclip/blob/main/backend/autoclip/prompts/highlight_v1.txt) · [YouTube hashtag guidance](https://support.google.com/youtube/answer/6390658)
+
+### Generate thumbnail artwork
+
+Open **Settings → Thumbnails** and choose an OpenAI image model or enter the model ID and base URL for a compatible server. A local server running on the Docker host uses an address such as `http://host.docker.internal:7860/v1`. The server must accept `POST /images/generations` and return a base64 image in `data[0].b64_json`. OpenAI can use the key saved under **AI models**, and receives a still as a visual reference when available. Both providers receive the clip title, description, and any art direction you add. [OpenAI Images API](https://developers.openai.com/api/reference/resources/images/methods/generate)
+
+Enable **Automatically generate covers for new renders** to generate one image per finished video. For a finished clip, open **Edit thumbnail** and click **Generate AI thumbnail** or **Regenerate thumbnail**. Add art direction to guide the next attempt. Successful generation updates the poster, JPG, and ZIP. It also supplies the thumbnail for future YouTube publications. A failed generation keeps the current cover. Without an image model, new renders use a frame cover. **Design from a video frame** provides a manual option with headline controls. [YouTube thumbnail design tips](https://support.google.com/youtube/answer/12340300)
 
 ```text
 01/

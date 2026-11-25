@@ -7,6 +7,7 @@ import RenderOptions, { HighlightOptions, SelectField, studioModes } from "../re
 import AISettings from "./ai-settings";
 import PublishingSettings from "./publishing-settings";
 import StorageSettings from "./storage-settings";
+import ThumbnailAISettings from "./thumbnail-ai-settings";
 import { settingsSections, useSettingsSection } from "./sections";
 
 const themes = [["light", "Light"], ["dark", "Dark"], ["system", "Match system"]];
@@ -90,7 +91,7 @@ function PreferencesPanel({ section, description, children }) {
 
 export default function SettingsForm() {
   const active = useSettingsSection();
-  const { render, models, publishing, storage, appearance } = settingsSections;
+  const { render, models, thumbnails, publishing, storage, appearance } = settingsSections;
 
   useEffect(() => {
     if (window.location.hash !== `#${active.id}`) return;
@@ -127,6 +128,9 @@ export default function SettingsForm() {
       </div>
       <div hidden={active !== models}>
         <AISettings />
+      </div>
+      <div hidden={active !== thumbnails}>
+        <ThumbnailAISettings />
       </div>
       <div hidden={active !== publishing}>
         <PublishingSettings />

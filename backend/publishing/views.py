@@ -16,6 +16,7 @@ from .config import PublishError, client_config, publishing_settings, seal
 from .forms import FinishForm, InstagramAppForm, NetworkSettingsForm, PlatformAppForm, PublishForm
 from .models import Authorization, Connection, Platform, Publication, PublishingSettings
 from .oauth import authorize_url, exchange, state_digest
+from .thumbnails import cover_options, youtube_video_id
 from .worker import clip_path
 
 
@@ -32,6 +33,9 @@ def publication_data(post):
         "account": post.account_label, "title": post.options["title"], "caption": post.options["caption"],
         "status": post.status, "progress": post.progress,
         "scheduled_at": post.scheduled_at, "started_at": post.started_at, "message": post.message, "url": post.url,
+        "thumbnail_state": post.options.get("thumbnail_state", ""),
+        "can_apply_thumbnail": (post.platform == Platform.YOUTUBE and post.status == Status.COMPLETE
+                                and bool(youtube_video_id(post.url))),
     }
 
 
@@ -233,7 +237,9 @@ def posts(request):
         return fail(str(exc))
     clip = job.clips[data["clip_index"]]
     start, end = clip.get("start_time"), clip.get("end_time")
-    duration = end - start if isinstance(start, (int, float)) and isinstance(end, (int, float)) else None
+    duration = clip.get("duration_seconds")
+    if duration is None and isinstance(start, (int, float)) and isinstance(end, (int, float)):
+        duration = end - start
     if platform == Platform.INSTAGRAM:
         if path.stat().st_size > 300_000_000:
             return fail("Instagram Reels support videos up to 300 MB.")
@@ -247,10 +253,12 @@ def posts(request):
         if len(data["caption"].encode("utf-8")) > 5000:
             return fail("Shorten the YouTube description to fit the included chapters within 5,000 bytes.")
     now = data["scheduled_at"] or timezone.now()
+    options = {field: data[field] for field in ("title", "caption", "privacy", "made_for_kids", "synthetic")}
+    options.update(cover_options(job, data["clip_index"], platform))
     post, created = Publication.objects.get_or_create(pk=data["request_id"], defaults={
         "owner": job.owner, "job": job, "clip_index": data["clip_index"], "platform": platform,
         "account_id": account["id"], "account_label": account["label"][:180],
-        "options": {field: data[field] for field in ("title", "caption", "privacy", "made_for_kids", "synthetic")},
+        "options": options,
         "scheduled_at": now, "next_at": now, "message": "Approved and queued for transfer.",
     })
     if post.owner != job.owner:
@@ -265,6 +273,8 @@ def post_action(request, post_id, action):
     record = Publication.objects.filter(owner=owner, pk=post_id)
     if not record.exists():
         raise Http404
+    if action == "thumbnail":
+        return queue_existing_thumbnail(record)
     if action == "cancel":
         changed = record.filter(status=Status.QUEUED, started_at__isnull=True).update(
             status=Status.CANCELLED, message="Cancelled before sending.", updated_at=timezone.now(),
@@ -279,3 +289,25 @@ def post_action(request, post_id, action):
     if not changed:
         return fail("That action is no longer available for this post.", status=409)
     return JsonResponse(publication_data(record.get()))
+
+
+def queue_existing_thumbnail(record):
+    with transaction.atomic():
+        post = record.select_for_update().filter(platform=Platform.YOUTUBE, status=Status.COMPLETE).first()
+        video_id = youtube_video_id(post.url) if post else ""
+        if not video_id:
+            return fail("There is no completed YouTube upload to update.", status=409)
+        options = cover_options(post.job, post.clip_index, post.platform)
+        if not options["thumbnail_file"]:
+            return fail("The JPG is unavailable. Save a thumbnail on the render first.")
+        now = timezone.now()
+        post.options.update(options)
+        post.transfer = seal({"video_id": video_id, "cover_since": now.timestamp()})
+        post.status = Status.PROCESSING
+        post.next_at = now
+        post.attempts = 0
+        post.progress = 99
+        post.message = "Thumbnail update queued for the existing YouTube video."
+        post.save(update_fields=["options", "transfer", "status", "next_at", "attempts",
+                                 "progress", "message", "updated_at"])
+    return JsonResponse(publication_data(post))

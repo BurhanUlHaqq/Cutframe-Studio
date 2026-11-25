@@ -7,9 +7,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable, Dict, List, Optional
 
-from .captions import Cue, build_cues, write_ass, write_srt
+from ..edit_styles import STYLES
+from .captions import Cue, build_edited_cues, write_ass, write_srt
+from .pacing import Pace, plan_pacing, tighten_clip
 from .reframe import Framer
-from .thumbnails import write_thumbnail
+from .thumbnails import create_thumbnail_set, write_thumbnail
 
 def _ratio(aspect_ratio: str) -> float:
     """Parse '9:16' → 9/16, '1:1' → 1.0."""
@@ -42,6 +44,8 @@ def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> s
 def _render_frames(
     in_path: str, silent_path: str, aspect_ratio: str, framing: str,
     on_frames: Optional[Callable[[int], None]] = None,
+    *,
+    editing_style="balanced",
 ) -> tuple[int, int]:
     """Apply the selected framing to a silent video stream."""
     try:
@@ -82,12 +86,14 @@ def _render_frames(
             multiplier = min(src_w // width_step, src_h // height_step)
             if multiplier:
                 crop_w, crop_h = width_step * multiplier, height_step * multiplier
-        if framing == "stream" and aspect_ratio == "9:16" and src_w >= src_h * 1.25 and src_h >= 32:
+        full_frame = framing == "stream" or (editing_style == "tutorial" and framing == "fit")
+        if full_frame and aspect_ratio == "9:16" and src_w >= src_h * 1.25 and src_h >= 32:
             # The full-width screen can use a larger portrait canvas than a subject crop.
             multiplier = min(src_h, 1080) // width_step
             crop_w, crop_h = width_step * multiplier, height_step * multiplier
 
-        framer = Framer(cv2, (src_w, src_h), (crop_w, crop_h), aspect_ratio, framing, fps)
+        framer = Framer(cv2, (src_w, src_h), (crop_w, crop_h), aspect_ratio, framing, fps,
+                        steady=STYLES[editing_style].steady, inset_only=editing_style == "gameplay")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(silent_path, fourcc, fps, (crop_w, crop_h))
         if not writer.isOpened():
@@ -116,16 +122,21 @@ def _render_frames(
             writer.release()
 
 
-def _encode_clip(cut_path: str, silent_path: str, out_path: str, cue_dir: Path, burn_captions: bool) -> None:
+def _encode_clip(cut_path: str, silent_path: str, out_path: str, cue_dir: Path, burn_captions: bool,
+                 *, audio_filter="") -> None:
     cmd = [
         "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
         "-i", silent_path,
         "-i", cut_path,
         "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "copy", "-movflags", "+faststart",
+        "-movflags", "+faststart",
         "-map", "0:v:0", "-map", "1:a:0?",
         "-shortest",
     ]
+    if audio_filter:
+        cmd.extend(("-af", audio_filter + ",aresample=48000,apad", "-c:a", "aac", "-b:a", "160k"))
+    else:
+        cmd.extend(("-c:a", "copy"))
     if burn_captions:
         cmd.extend(("-vf", "ass=captions.ass"))
     subprocess.run([*cmd, out_path], cwd=cue_dir, check=True)
@@ -142,7 +153,10 @@ def crop_clip_local(
     cues: Optional[list[Cue]] = None,
     caption_style: str = "classic",
     thumbnail_path: Optional[Path] = None,
+    on_thumbnail: Optional[Callable[[str], None]] = None,
     on_activity: Optional[Callable[[str, float, bool], None]] = None,
+    editing_style: str = "balanced",
+    pace: Optional[Pace] = None,
 ) -> str:
     """Cut + reframe one highlight, returning the local mp4 path."""
     out_path = str(Path(out_path).resolve())
@@ -153,24 +167,35 @@ def crop_clip_local(
         if on_activity is not None:
             on_activity("Cutting the source segment", 0, True)
         _cut_subclip(source_path, start_time, end_time, cut_path)
+        if pace and pace.removed:
+            if on_activity is not None:
+                on_activity(f"Tightening {len(pace.removed)} verified pauses", 0.10, True)
+            paced_path = str(path / "paced.mkv")
+            tighten_clip(cut_path, paced_path, pace)
+            cut_path = paced_path
         on_frames = None
         if on_activity is not None:
             on_activity("Reframing video", 0.15, True)
             on_frames = lambda percent: on_activity(f"Reframing video · {percent}%", 0.15 + 0.60 * percent / 100, False)
-        width, height = _render_frames(cut_path, silent_path, aspect_ratio, framing, on_frames)
+        width, height = _render_frames(cut_path, silent_path, aspect_ratio, framing, on_frames,
+                                       editing_style=editing_style)
         burn_captions = bool(cues) and caption_style != "off"
         if burn_captions:
-            write_ass(path / "captions.ass", cues, caption_style, width, height)
+            write_ass(path / "captions.ass", cues, caption_style, width, height, editing_style=editing_style)
         pending = path / "final.mp4"
         if on_activity is not None:
             on_activity("Encoding video with captions" if burn_captions else "Encoding video", 0.75, True)
-        _encode_clip(cut_path, silent_path, str(pending), path, burn_captions)
-        if thumbnail_path is not None:
+        _encode_clip(cut_path, silent_path, str(pending), path, burn_captions,
+                     audio_filter=STYLES[editing_style].audio_filter)
+        if thumbnail_path is not None or on_thumbnail:
             if on_activity is not None:
-                on_activity("Selecting a thumbnail", 0.95, True)
-            cover = path / "cover.jpg"
-            write_thumbnail(silent_path, cover)
-            cover.replace(thumbnail_path)
+                on_activity("Preparing thumbnail choices", 0.95, True)
+            if on_thumbnail:
+                on_thumbnail(silent_path)
+            else:
+                cover = path / "cover.jpg"
+                write_thumbnail(silent_path, cover)
+                cover.replace(thumbnail_path)
         pending.replace(out_path)
     return out_path
 
@@ -186,26 +211,42 @@ def crop_highlights_local(
     segments: Optional[list[dict]] = None,
     on_clip: Optional[Callable[[int, int], None]] = None,
     on_activity: Optional[Callable[[int, int, str, float, bool], None]] = None,
+    editing_style: str = "balanced",
+    minimum_duration: Optional[int] = None,
 ) -> List[Dict]:
     out_dir = os.path.abspath(out_dir)
     os.makedirs(out_dir, exist_ok=True)
     results: List[Dict] = []
+    profile = STYLES[editing_style]
+    framing = profile.framing if framing == "auto" else framing
     for i, h in enumerate(highlights, 1):
         out_path = os.path.join(out_dir, f"short_{i:02d}.mp4")
         print(f"[clip/local] {i}/{len(highlights)}: {h.get('title', '(untitled)')}", flush=True)
         try:
             start, end = float(h["start_time"]), float(h["end_time"])
-            cues = build_cues(segments or [], start, end) if caption_style != "off" else []
+            pace = plan_pacing(source_path, segments or [], start, end, profile, minimum_duration)
+            cues = build_edited_cues(segments or [], start, pace, editing_style) if caption_style != "off" else []
             thumbnail_path = Path(out_path).with_suffix(".jpg")
+            result = {**h, "clip_url": out_path, "thumbnail_path": str(thumbnail_path)}
+            if pace.removed:
+                result.update(duration_seconds=round(pace.runtime, 3), pauses_trimmed=len(pace.removed))
+
+            def prepare_cover(frame_video):
+                options, design = create_thumbnail_set(
+                    frame_video, thumbnail_path, aspect_ratio=aspect_ratio,
+                    title=h.get("cover_headline") or h.get("title"),
+                    main_screen=framing == "stream" and aspect_ratio == "9:16",
+                )
+                result.update(thumbnail_options=options, thumbnail_design=design)
+
             update = None
             if on_activity is not None:
                 update = lambda message, portion, event: on_activity(i, len(highlights), message, portion, event)
             crop_clip_local(
                 source_path, start, end, aspect_ratio, out_path, framing=framing,
-                cues=cues, caption_style=caption_style, thumbnail_path=thumbnail_path,
-                on_activity=update,
+                cues=cues, caption_style=caption_style, on_thumbnail=prepare_cover,
+                on_activity=update, editing_style=editing_style, pace=pace,
             )
-            result = {**h, "clip_url": out_path, "thumbnail_path": str(thumbnail_path)}
             if cues:
                 caption_path = Path(out_path).with_suffix(".srt")
                 write_srt(caption_path, cues)

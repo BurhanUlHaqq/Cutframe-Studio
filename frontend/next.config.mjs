@@ -4,6 +4,7 @@ export default {
   output: "standalone",
   poweredByHeader: false,
   skipTrailingSlashRedirect: true,
+  experimental: { proxyTimeout: 115_000 },
   async rewrites() {
     return [
       { source: "/api/:path*/", destination: `${backend}/api/:path*/` },

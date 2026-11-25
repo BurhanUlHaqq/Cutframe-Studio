@@ -57,7 +57,7 @@ def webcam_candidates(boxes, width, height):
 
 
 class Framer:
-    def __init__(self, cv, source_size, output_size, aspect_ratio, mode, fps):
+    def __init__(self, cv, source_size, output_size, aspect_ratio, mode, fps, *, steady=False, inset_only=False):
         self.cv = cv
         self.source_w, self.source_h = source_size
         self.width, self.height = output_size
@@ -65,7 +65,10 @@ class Framer:
         self.mode = mode
         self.detector = None
         self.stride = max(1, round(fps / 6))
-        self.smoothing = 1 - math.exp(-5 / fps)
+        self.smoothing = 1 - math.exp(-(3 if steady else 5) / fps)
+        self.layout_confirmations = 5 if steady else 3
+        self.inset_only = inset_only
+        self.track_webcam = mode == "stream" or (mode == "auto" and not steady)
         self.previous_sample = None
         self.layout = None
         self.pending = None
@@ -98,13 +101,13 @@ class Framer:
         else:
             self.pending_count = self.pending_count + 1 if self.pending == layout else 1
             self.pending = layout
-            if self.pending_count >= 3:
+            if self.pending_count >= self.layout_confirmations:
                 self.layout, self.targets, self.centers = layout, targets, targets
                 self.pending, self.pending_count = None, 0
 
     def _observe_webcam(self, boxes, cut):
         candidates = webcam_candidates(boxes, self.source_w, self.source_h)
-        if self.mode == "stream" and not candidates and len(boxes) == 1:
+        if self.mode == "stream" and not self.inset_only and not candidates and len(boxes) == 1:
             candidates = boxes
         if self.mode == "auto" and self.webcam is None and len(candidates) > 1:
             areas = sorted((box[2] * box[3] for box in candidates), reverse=True)
@@ -128,7 +131,7 @@ class Framer:
         candidate = max(nearby or candidates, key=lambda box: box[2] * box[3])
         self.webcam_candidate = candidate
         self.webcam_count = self.webcam_count + 1 if nearby else 1
-        if self.mode == "stream" or self.webcam_count >= 3:
+        if (self.mode == "stream" and not self.inset_only) or self.webcam_count >= 3:
             self.webcam_target = candidate
             if self.webcam is None:
                 self.webcam = candidate
@@ -189,7 +192,7 @@ class Framer:
         self.previous_sample = sample
         if cut or index % self.stride == 0:
             boxes = detect_faces(self.cv, self.detector, frame)
-            if self.allow_split:
+            if self.allow_split and self.track_webcam:
                 self._observe_webcam(boxes, cut)
             if self.mode == "auto":
                 self._observe(boxes, cut)

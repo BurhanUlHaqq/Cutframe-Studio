@@ -5,6 +5,7 @@ import { api, submit } from "./api";
 
 const initialPreferences = {
   studio_mode: "shorts", highlight_minutes: 10, highlight_method: "transcript",
+  editing_style: "balanced",
   selection_mode: "count", min_viral_score: 80,
   clip_count: 5, aspect_ratio: "9:16", quality: "720", language: "",
   framing: "auto", caption_style: "classic",

@@ -2,6 +2,8 @@ import uuid
 
 from django.db import models
 
+from shorts_generator.edit_styles import STYLES
+
 
 ASPECT_RATIOS = [("9:16", "Vertical"), ("1:1", "Square"), ("16:9", "Landscape")]
 SOURCE_QUALITIES = [("480", "480p"), ("720", "720p"), ("1080", "1080p")]
@@ -10,10 +12,11 @@ FRAMING_MODES = [
     ("center", "Center crop"), ("fit", "Fit with blur"),
 ]
 CAPTION_STYLES = [("classic", "Classic captions"), ("highlight", "Highlighted words"), ("off", "Captions off")]
+EDITING_STYLES = [(key, style.label) for key, style in STYLES.items()]
 DEFAULT_VIRAL_SCORE = 80
 DEFAULT_HIGHLIGHT_MINUTES = 10
 RENDER_OPTIONS = (
-    "studio_mode", "highlight_minutes", "highlight_method",
+    "studio_mode", "highlight_minutes", "highlight_method", "editing_style",
     "selection_mode", "clip_count", "min_viral_score", "aspect_ratio", "quality", "language", "framing", "caption_style",
     "min_clip_seconds", "max_clip_seconds",
 )
@@ -45,6 +48,7 @@ class WorkspacePreferences(models.Model):
     studio_mode = models.CharField(max_length=10, choices=StudioMode, default=StudioMode.SHORTS)
     highlight_minutes = models.PositiveSmallIntegerField(default=DEFAULT_HIGHLIGHT_MINUTES)
     highlight_method = models.CharField(max_length=10, choices=HighlightMethod, default=HighlightMethod.TRANSCRIPT)
+    editing_style = models.CharField(max_length=12, choices=EDITING_STYLES, default="balanced")
     selection_mode = models.CharField(max_length=5, choices=ClipSelection, default=ClipSelection.COUNT)
     clip_count = models.PositiveSmallIntegerField(default=5)
     min_viral_score = models.PositiveSmallIntegerField(default=DEFAULT_VIRAL_SCORE)
@@ -60,6 +64,11 @@ class WorkspacePreferences(models.Model):
 
 
 class WorkspaceAISettings(models.Model):
+    owner = models.UUIDField(primary_key=True, editable=False)
+    config = models.JSONField(default=dict)
+
+
+class WorkspaceThumbnailSettings(models.Model):
     owner = models.UUIDField(primary_key=True, editable=False)
     config = models.JSONField(default=dict)
 
@@ -85,6 +94,7 @@ class Job(models.Model):
     studio_mode = models.CharField(max_length=10, choices=StudioMode, default=StudioMode.SHORTS)
     highlight_minutes = models.PositiveSmallIntegerField(default=DEFAULT_HIGHLIGHT_MINUTES)
     highlight_method = models.CharField(max_length=10, choices=HighlightMethod, default=HighlightMethod.TRANSCRIPT)
+    editing_style = models.CharField(max_length=12, choices=EDITING_STYLES, default="balanced")
     selection_mode = models.CharField(max_length=5, choices=ClipSelection, default=ClipSelection.COUNT)
     clip_count = models.PositiveSmallIntegerField()
     min_viral_score = models.PositiveSmallIntegerField(default=DEFAULT_VIRAL_SCORE)

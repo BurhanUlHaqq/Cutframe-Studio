@@ -6,14 +6,16 @@ from django.utils import timezone
 from filelock import FileLock
 
 from shorts_generator import generate_shorts
+from shorts_generator.edit_styles import STYLES
 from shorts_generator.local.llm import RankingConfigurationError
 from shorts_generator.local.media import InvalidSourceVideo
 from shorts_generator.pipeline import NoMatchingHighlights
 from shorts_generator.reel import generate_highlight_reel
 
 from .ai_settings import installation_ai, resolve_ai_options, saved_ai_options, transcription_options
-from .exports import job_directory, make_export
+from .exports import job_directory, make_export, set_ai_thumbnail, thumbnail_reference
 from .models import ClipSelection, HighlightMethod, Job, StudioMode
+from .thumbnail_ai import ThumbnailGenerationError, image_provider, make_ai_cover, saved_thumbnail_ai
 from .uploads import uploaded_source
 
 logger = logging.getLogger(__name__)
@@ -105,10 +107,12 @@ def process_next_job():
                 quality=job.quality, source_name=job.source_name, ranking=ranking, **source_options,
             )
         else:
+            report("download", 1, f"{STYLES[job.editing_style].label} editing style")
             shorts = generate_shorts(
                 job.source_url, num_clips=job.clip_count, aspect_ratio=job.aspect_ratio,
                 min_viral_score=min_viral_score, clip_length=(job.min_clip_seconds, job.max_clip_seconds),
-                download_format=job.quality, framing=job.framing, ranking=resolve_ai_options(options, installation),
+                download_format=job.quality, framing=job.framing, editing_style=job.editing_style,
+                ranking=None if job.editing_style == "gameplay" else resolve_ai_options(options, installation),
                 **source_options,
             )
         successful = sum(bool(clip.get("clip_url")) for clip in shorts)
@@ -117,14 +121,33 @@ def process_next_job():
                 report("render", 89, f"Clip {index} could not be rendered", level="warning")
         if successful:
             export_message = "Packaging the highlight reel" if reel else f"Packaging the ZIP with {successful} clip{'s' if successful != 1 else ''}"
+            provider = None
+            covers = saved_thumbnail_ai(job.owner)
+            if covers.get("provider") and covers.get("automatic"):
+                try:
+                    provider = image_provider(job.owner, covers)
+                except ThumbnailGenerationError as exc:
+                    report("export", 92, f"AI covers unavailable. {exc}", level="warning")
+
+            def generate_cover(files, clip, index):
+                report("export", 92 + round(5 * (index - 1) / successful),
+                       f"Generating AI cover {index} of {successful}")
+                try:
+                    content = make_ai_cover(provider, clip, job.aspect_ratio, work,
+                                            reference=thumbnail_reference(files, clip))
+                    set_ai_thumbnail(files, clip, content, provider.model)
+                except ThumbnailGenerationError as exc:
+                    report("export", progress, f"Clip {index} kept its frame cover. {exc}", level="warning")
+
             report("export", 92, export_message)
-            clips = make_export(job, shorts)
+            clips = make_export(job, shorts, generate_cover=generate_cover if provider else None)
             message = "ZIP ready to download"
         elif shorts or min_viral_score is None:
             raise RuntimeError("No clips rendered successfully.")
         else:
             clips = []
-            message = f"No highlights scored {min_viral_score} or higher"
+            message = (f"No moments reached an activity score of {min_viral_score}" if job.editing_style == "gameplay"
+                       else f"No highlights scored {min_viral_score} or higher")
         now = timezone.now()
         events.append({"time": now.isoformat(), "stage": "complete", "message": message, "level": "info"})
         record.update(

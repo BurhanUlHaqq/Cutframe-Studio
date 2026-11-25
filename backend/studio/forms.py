@@ -4,10 +4,11 @@ from urllib.parse import parse_qs, urlsplit
 
 from django import forms
 
+from shorts_generator.local.cover_design import ACCENTS, clean_headline
 from shorts_generator.url_validation import validate_youtube_url
 
 from .models import (
-    ASPECT_RATIOS, CAPTION_STYLES, DEFAULT_VIRAL_SCORE, FRAMING_MODES, SOURCE_QUALITIES,
+    ASPECT_RATIOS, CAPTION_STYLES, DEFAULT_VIRAL_SCORE, EDITING_STYLES, FRAMING_MODES, SOURCE_QUALITIES,
     ClipSelection, StudioMode, HighlightMethod, WorkspacePreferences,
 )
 from .uploads import VIDEO_EXTENSIONS, upload_limit
@@ -17,6 +18,7 @@ class RenderOptionsForm(forms.Form):
     studio_mode = forms.ChoiceField(choices=StudioMode.choices)
     highlight_minutes = forms.IntegerField(min_value=1, max_value=30)
     highlight_method = forms.ChoiceField(choices=HighlightMethod.choices)
+    editing_style = forms.ChoiceField(choices=EDITING_STYLES)
     selection_mode = forms.ChoiceField(choices=ClipSelection.choices)
     clip_count = forms.IntegerField(min_value=1, max_value=10)
     min_viral_score = forms.IntegerField(required=False, min_value=0, max_value=100)
@@ -82,6 +84,16 @@ class ClipTextForm(forms.Form):
         return " ".join(self.cleaned_data["title"].split())
 
 
+class ThumbnailDesignForm(forms.Form):
+    frame = forms.IntegerField(min_value=0, max_value=2)
+    headline = forms.CharField(required=False, max_length=52)
+    accent = forms.ChoiceField(choices=[(name, name) for name in ACCENTS])
+    placement = forms.ChoiceField(choices=[(name, name) for name in ("auto", "top", "bottom")])
+
+    def clean_headline(self):
+        return clean_headline(self.cleaned_data["headline"])
+
+
 class UploadJobForm(RenderOptionsForm):
     video = forms.FileField(max_length=255)
 
@@ -103,7 +115,7 @@ class UploadJobForm(RenderOptionsForm):
 
 def highlight_job_options(data):
     if data.get("studio_mode") == StudioMode.HIGHLIGHTS:
-        data.update(aspect_ratio="16:9", clip_count=1, selection_mode=ClipSelection.COUNT,
+        data.update(aspect_ratio="16:9", clip_count=1, selection_mode=ClipSelection.COUNT, editing_style="balanced",
                     min_clip_seconds=None, max_clip_seconds=None)
     return data
 

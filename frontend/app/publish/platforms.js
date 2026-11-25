@@ -7,6 +7,10 @@ export const platforms = {
     upload: "https://studio.youtube.com/",
     idLabel: "YouTube OAuth client ID",
     secretLabel: "YouTube OAuth client secret",
+    dashboard: "https://console.cloud.google.com/auth/clients",
+    dashboardLabel: "Google OAuth clients",
+    credentialLocation: "Create a Web application client and copy its Client ID and Client secret when Google shows them.",
+    prerequisite: ["Enable YouTube Data API", "https://console.cloud.google.com/apis/library/youtube.googleapis.com"],
     instructions: [
       "Enable YouTube Data API v3 in a Google Cloud project.",
       "Configure OAuth consent and add your account as a test user if the project is in testing.",
@@ -21,6 +25,10 @@ export const platforms = {
     upload: "https://www.tiktok.com/tiktokstudio/upload",
     idLabel: "TikTok client key",
     secretLabel: "TikTok client secret",
+    dashboard: "https://developers.tiktok.com/portal/apps",
+    dashboardLabel: "TikTok Manage apps",
+    credentialLocation: "Open your app’s App details → Credentials and copy its Client key and Client secret.",
+    prerequisite: ["Register a TikTok app", "https://developers.tiktok.com/docs/en/getting-started-create-an-app"],
     instructions: [
       "Create a TikTok developer app with Login Kit for Web and the Content Posting API.",
       "Request video.upload and user.info.basic access. Use your client key as the client ID.",
@@ -35,6 +43,10 @@ export const platforms = {
     upload: "https://www.instagram.com/",
     idLabel: "Meta app ID",
     secretLabel: "Meta app secret",
+    dashboard: "https://developers.facebook.com/apps/",
+    dashboardLabel: "Meta My Apps",
+    credentialLocation: "Open your app’s App settings → Basic and reveal the App secret beside the App ID.",
+    prerequisite: ["Set up Instagram with Facebook Login", "https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-facebook-login/"],
     instructions: [
       "Link an Instagram Business or Creator account to a Facebook Page you manage.",
       "Set up Instagram API with Facebook Login for Business. Enable pages_show_list, pages_read_engagement, instagram_basic, and instagram_content_publish.",

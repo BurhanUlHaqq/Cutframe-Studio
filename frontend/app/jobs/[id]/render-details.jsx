@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { api, stages, statusLabels, submit } from "../../api";
 import { usePreferences } from "../../preferences";
+import { editingStyles } from "../../render-options";
+import ThumbnailEditor from "./thumbnail-editor";
 
 const terminal = new Set(["complete", "failed"]);
 const eventTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
@@ -39,12 +41,13 @@ function RenderActivity({ events = [], active }) {
   );
 }
 
-function ClipCard({ clip, ratio, onSave, showScores, publishUrl, reel }) {
+function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, gameplay }) {
   const [playing, setPlaying] = useState(false);
   const [copyState, setCopyState] = useState("");
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState("");
+  const [editingCover, setEditingCover] = useState(false);
   const editId = useId();
   const video = useRef(null);
   const seek = useRef(0);
@@ -100,8 +103,8 @@ function ClipCard({ clip, ratio, onSave, showScores, publishUrl, reel }) {
       <div className="clip-copy">
         <div className="clip-meta">
           <span>{reel ? `${formatTime(clip.end_time)} runtime · ${clip.chapters?.length ?? 0} selected moments` :
-            `${formatTime(clip.start_time)}–${formatTime(clip.end_time)} · ${Number((clip.end_time - clip.start_time).toFixed(1))}s`}</span>
-          {showScores && typeof clip.score === "number" && <span className="clip-score">Score {clip.score}</span>}
+            `${formatTime(clip.start_time)}–${formatTime(clip.end_time)} · ${Number((clip.duration_seconds ?? clip.end_time - clip.start_time).toFixed(1))}s`}</span>
+          {showScores && typeof clip.score === "number" && <span className="clip-score">{gameplay ? "Activity" : "Score"} {clip.score}</span>}
         </div>
         {draft ? (
           <form className="clip-editor" onSubmit={save}>
@@ -150,7 +153,11 @@ function ClipCard({ clip, ratio, onSave, showScores, publishUrl, reel }) {
                 <Send size={16} aria-hidden="true" /> Publish
               </Link>
               <a className="secondary-button" href={clip.text_url}><FileText size={16} aria-hidden="true" /> TXT</a>
-              <a className="secondary-button" href={`${clip.thumbnail_url}?download=1`} aria-label={`Download thumbnail for ${clip.title}`}>
+              {clip.thumbnail_editor_url && <button className="secondary-button" type="button" onClick={() => setEditingCover(true)}>
+                <ImageIcon size={16} aria-hidden="true" /> Edit thumbnail
+              </button>}
+              <a className="secondary-button" href={`${clip.thumbnail_url}${clip.thumbnail_url.includes("?") ? "&" : "?"}download=1`}
+                aria-label={`Download thumbnail for ${clip.title}`}>
                 <ImageIcon size={16} aria-hidden="true" /> JPG
               </a>
               {clip.captions_url && <a className="secondary-button" href={clip.captions_url} aria-label={`Download captions for ${clip.title}`}>
@@ -161,6 +168,8 @@ function ClipCard({ clip, ratio, onSave, showScores, publishUrl, reel }) {
         )}
         <span className="sr-only" aria-live="polite">{copyState}</span>
       </div>
+      {editingCover && <ThumbnailEditor clip={clip} index={index} ratio={ratio} onSave={onSave}
+        onClose={() => setEditingCover(false)} />}
     </article>
   );
 }
@@ -217,12 +226,13 @@ export default function RenderDetails({ id }) {
   const complete = job.status === "complete";
   const failed = job.status === "failed";
   const reel = job.studio_mode === "highlights";
+  const gameplay = job.editing_style === "gameplay";
   const byScore = job.selection_mode === "score";
   const count = complete ? job.clips.length : job.clip_count;
   const noMatches = complete && count === 0;
   const countLabel = `${count} ${count === 1 ? "clip" : "clips"}`;
   const selection = reel ? `Highlights · up to ${job.highlight_minutes} min` :
-    byScore ? `Viral score ${job.min_viral_score}+` : `Up to ${countLabel}`;
+    byScore ? `${gameplay ? "Activity" : "Viral"} score ${job.min_viral_score}+` : `Up to ${countLabel}`;
   const activeStage = stages.findIndex(([key]) => key === job.stage);
   const sourceStages = job.source_type === "upload"
     ? [["download", "Read uploaded video"], ...stages.slice(1)] : stages;
@@ -240,7 +250,7 @@ export default function RenderDetails({ id }) {
               <h1>{failed ? "Render failed" : noMatches ? "No clips met your score" :
                 complete ? reel ? "Your highlight reel is ready" : "Your clips are ready" :
                 reel ? "Creating your highlight reel" : "Creating your clips"}</h1>
-              <p>{complete ? reel ? `${formatTime(job.clips[0]?.end_time || 0)} runtime` : countLabel : selection} · {job.aspect_ratio} · {job.source_name || `${job.quality}p`}</p>
+              <p>{complete ? reel ? `${formatTime(job.clips[0]?.end_time || 0)} runtime` : countLabel : selection} · {job.aspect_ratio} · {job.source_name || `${job.quality}p`}{!reel && job.editing_style && ` · ${editingStyles[job.editing_style]?.[0]}`}</p>
             </div>
           </div>
           {noMatches ? <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link> :
@@ -275,7 +285,7 @@ export default function RenderDetails({ id }) {
             <p className="muted">You can close this page while the worker finishes. Find the result in Render history.</p>
           </div>
         ) : noMatches ? (
-          <p className="muted">No highlight reached {job.min_viral_score}. A lower minimum may return more clips.</p>
+          <p className="muted">No highlight reached {job.min_viral_score}{gameplay ? " on the activity score" : ""}. A lower minimum may return more clips.</p>
         ) : !byScore && count < job.clip_count ? (
           <p className="muted">This render produced {count} of the {job.clip_count} requested clips.</p>
         ) : null}
@@ -288,7 +298,7 @@ export default function RenderDetails({ id }) {
             <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link>
           </div>
           <div className={reel ? "reel-result" : "clip-grid"}>
-            {job.clips.map((clip, index) => <ClipCard key={clip.video_url} reel={reel} clip={clip} ratio={job.aspect_ratio}
+            {job.clips.map((clip, index) => <ClipCard key={clip.video_url} reel={reel} gameplay={gameplay} clip={clip} index={index} ratio={job.aspect_ratio}
               publishUrl={`/publish?job=${job.id}&clip=${index}`}
               onSave={setJob} showScores={!preferencesLoading && preferences.show_scores} />)}
           </div>

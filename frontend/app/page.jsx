@@ -9,18 +9,18 @@ import {
 } from "lucide-react";
 import { api, statusLabels, submit, submitUpload } from "./api";
 import { usePreferences } from "./preferences";
-import RenderOptions, { HighlightOptions } from "./render-options";
+import RenderOptions, { editingStyles, HighlightOptions } from "./render-options";
 
 const exportItems = [
   [Film, "MP4 clips", "Named after each clip’s title"],
-  [ImageIcon, "JPG thumbnails", "A sharp, caption-free frame from each clip"],
-  [FileText, "TXT metadata", "A title and ready-to-post description"],
+  [ImageIcon, "JPG thumbnails", "An editable cover for each clip"],
+  [FileText, "TXT metadata", "Title, description, and topic hashtags"],
   [Captions, "SRT captions", "Included with captioned clips"],
 ];
 const reelItems = [
   [Film, "One landscape MP4", "Selected moments in source order"],
-  [ImageIcon, "JPG thumbnail", "A clean frame from a selected moment"],
-  [FileText, "TXT metadata", "Title, description, and eligible YouTube chapters"],
+  [ImageIcon, "JPG thumbnail", "An editable cover from the selected moments"],
+  [FileText, "TXT metadata", "Description, topic hashtags, and eligible chapters"],
   [Captions, "SRT captions", "Timed to the finished reel when captions are enabled"],
 ];
 const modes = [
@@ -214,13 +214,13 @@ export default function Studio() {
               const reel = job.studio_mode === "highlights";
               const selection = reel ? `Highlights · up to ${job.highlight_minutes} min` :
                 complete ? `${job.clips.length} ${job.clips.length === 1 ? "clip" : "clips"}` :
-                job.selection_mode === "score" ? `Viral score ${job.min_viral_score}+` : `Up to ${job.clip_count} clips`;
+                job.selection_mode === "score" ? `${job.editing_style === "gameplay" ? "Activity" : "Viral"} score ${job.min_viral_score}+` : `Up to ${job.clip_count} clips`;
               return (
                 <Link href={`/jobs/${job.id}`} className="history-row" key={job.id}>
                   <span className="export-icon">{reel ? <LibraryBig size={19} aria-hidden="true" /> : <Film size={19} aria-hidden="true" />}</span>
                   <span className="history-name">
                     <strong>{job.clips[0]?.title || job.source_name || `YouTube video ${job.video_id}`}</strong>
-                    <small>{selection} · {job.aspect_ratio}</small>
+                    <small>{selection} · {job.aspect_ratio}{!reel && job.editing_style && ` · ${editingStyles[job.editing_style]?.[0]}`}</small>
                   </span>
                   <span className={`status ${complete && !job.clips.length ? "queued" : job.status}`}>
                     {complete && !job.clips.length ? "No matches" : statusLabels[job.status]}

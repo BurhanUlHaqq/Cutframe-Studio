@@ -93,6 +93,7 @@ export default function PublishStudio({ initialJob, initialClip }) {
   const reel = job?.studio_mode === "highlights";
   const youtube = destination?.platform === "youtube";
   const tiktok = destination?.platform === "tiktok";
+  const instagram = destination?.platform === "instagram";
 
   function show(next) {
     setError("");
@@ -176,7 +177,7 @@ export default function PublishStudio({ initialJob, initialClip }) {
           {connections?.platforms.map((entry) => {
             const platform = platforms[entry.platform];
             const connected = entry.accounts.length > 0;
-            const callback = entry.redirect_uri || `https://your-callback-domain.example/api/publishing/callback/${entry.platform}/`;
+            const callback = entry.redirect_uri;
             return (
               <article className="panel settings-panel publish-account" key={entry.platform}>
                 <div className="panel-heading">
@@ -203,12 +204,13 @@ export default function PublishStudio({ initialJob, initialClip }) {
                 <details className="advanced publish-guide" open={!entry.configured ? true : undefined}>
                   <summary>Setup guide <ChevronDown size={16} aria-hidden="true" /></summary>
                   <ol>{platform.instructions.map((step) => <li key={step}>{step}</li>)}</ol>
-                  <p>Save the app ID and secret in Settings → Publishing, then return here to connect your account.</p>
+                  <p>{platform.credentialLocation} Save the values in Settings → Publishing, then return here to connect.</p>
                   {!entry.redirect_uri && <p>Save a public HTTPS callback origin to generate the exact redirect URI.</p>}
-                  <code className="publish-callback">{callback}</code>
+                  {callback && <code className="publish-callback">{callback}</code>}
                   <div className="publish-buttons">
                     <Link className="secondary-button" href="/settings#publishing-settings-title">Open publishing settings</Link>
-                    <button className="secondary-button" type="button" onClick={() => copy(callback)}><Clipboard size={15} aria-hidden="true" /> Copy callback</button>
+                    <a className="secondary-button" href={platform.dashboard} target="_blank" rel="noreferrer">{platform.dashboardLabel} <ExternalLink size={14} aria-hidden="true" /></a>
+                    {callback && <button className="secondary-button" type="button" onClick={() => copy(callback)}><Clipboard size={15} aria-hidden="true" /> Copy callback</button>}
                     <a className="secondary-button" href={platform.docs} target="_blank" rel="noreferrer">Platform docs <ExternalLink size={14} aria-hidden="true" /></a>
                   </div>
                 </details>
@@ -265,6 +267,9 @@ export default function PublishStudio({ initialJob, initialClip }) {
                   </select>
                   <ChevronDown size={16} aria-hidden="true" />
                 </div>
+                {youtube && <small>YouTube gets the saved JPG after it finishes processing the video.</small>}
+                {instagram && <small>Instagram uses the saved thumbnail’s video frame as the cover when available.</small>}
+                {tiktok && <small>Choose a cover in TikTok when you finish the inbox draft.</small>}
               </div>
               <div><label htmlFor="publish-title-field">{youtube ? "YouTube title" : "Title"}</label>
                 <div className="input-wrap"><input id="publish-title-field" required maxLength={100} value={draft.title}
@@ -343,6 +348,12 @@ export default function PublishStudio({ initialJob, initialClip }) {
                 <div className="publish-buttons">
                   <Link className="secondary-button" href={`/jobs/${post.job_id}`}>View clip</Link>
                   {post.url && <a className="secondary-button" href={post.url} target="_blank" rel="noreferrer">Open post <ExternalLink size={14} aria-hidden="true" /></a>}
+                  {post.can_apply_thumbnail && <button type="button" className="secondary-button" disabled={Boolean(busy)}
+                    onClick={() => perform("thumbnail", async () => {
+                      const updated = await submit(`publishing/posts/${post.id}/thumbnail/`, {});
+                      setPosts((previous) => previous.map((item) => item.id === updated.id ? updated : item));
+                      setMessage("Thumbnail update queued for the existing video.");
+                    })}>{post.thumbnail_state === "applied" ? "Update thumbnail" : "Apply thumbnail"}</button>}
                   {post.platform === "tiktok" && post.status === "inbox" && post.caption &&
                     <button className="secondary-button" type="button" onClick={() => copy(post.caption)}>Copy caption</button>}
                   {([["cancel", "Cancel"], ["retry", "Retry"], ["check", "Check status"]]).map(([action, label]) =>

@@ -209,6 +209,89 @@ class PublishingTests(TestCase):
         self.assertEqual(post.status, "complete")
         self.assertEqual(post.url, "https://www.youtube.com/watch?v=video123")
 
+    def test_youtube_waits_for_processing_and_uploads_the_approved_jpg_without_resending_video(self):
+        files = job_directory(self.job.id) / "files"
+        filename = "clip-01-cover-0123456789abcdef01234567.jpg"
+        cover = b"\xff\xd8edited thumbnail\xff\xd9"
+        (files / filename).write_bytes(cover)
+        self.job.clips[0]["thumbnail_file"] = filename
+        self.job.save(update_fields=["clips"])
+        post = self.queue("youtube")
+        # Later edits must leave an already approved upload pinned to its selected JPG.
+        self.job.clips[0].pop("thumbnail_file")
+        self.job.save(update_fields=["clips"])
+        (files / "clip-01.jpg").write_bytes(b"other cover")
+
+        def upload(request):
+            if request.method == "POST":
+                return httpx.Response(200, headers={"Location": "https://www.googleapis.com/upload/test"})
+            self.assertEqual(request.method, "PUT")
+            self.assertEqual(request.read(), b"example video")
+            return httpx.Response(201, json={"id": "video123", "status": {"privacyStatus": "private"}})
+
+        self.run_with(upload)
+        post.refresh_from_db()
+        self.assertEqual(post.status, Publication.Status.PROCESSING)
+        self.assertEqual(unseal(post.transfer)["video_id"], "video123")
+        self.assertEqual(post.url, "https://www.youtube.com/watch?v=video123")
+        (files / "clip-01.mp4").unlink()
+
+        def processing(request):
+            self.assertEqual((request.method, request.url.path), ("GET", "/youtube/v3/videos"))
+            self.assertEqual(request.url.params["id"], "video123")
+            return httpx.Response(200, json={"items": [{"processingDetails": {"processingStatus": "processing"}}]})
+
+        Publication.objects.filter(pk=post.pk).update(next_at=timezone.now())
+        self.run_with(processing)
+        post.refresh_from_db()
+        self.assertEqual(post.status, Publication.Status.PROCESSING)
+
+        def ready(request):
+            if request.method == "GET":
+                return httpx.Response(200, json={"items": [{"processingDetails": {"processingStatus": "succeeded"}}]})
+            self.assertEqual((request.method, request.url.path), ("POST", "/upload/youtube/v3/thumbnails/set"))
+            self.assertEqual(request.url.params["videoId"], "video123")
+            self.assertEqual(request.url.params["uploadType"], "media")
+            self.assertEqual(request.headers["Content-Type"], "image/jpeg")
+            self.assertEqual(request.read(), cover)
+            return httpx.Response(200, json={"items": [{}]})
+
+        Publication.objects.filter(pk=post.pk).update(next_at=timezone.now())
+        self.run_with(ready)
+        post.refresh_from_db()
+        self.assertEqual(post.status, Publication.Status.COMPLETE)
+        self.assertEqual(post.options["thumbnail_state"], "applied")
+        self.assertEqual(post.transfer, "")
+
+    def test_completed_youtube_upload_can_retry_a_thumbnail_after_a_channel_error(self):
+        post = self.queue("youtube")
+        post.status = Publication.Status.COMPLETE
+        post.url = "https://www.youtube.com/watch?v=video123"
+        post.save(update_fields=["status", "url"])
+        action = reverse("publish_action", args=[post.id, "thumbnail"])
+        self.assertEqual(Client().post(action).status_code, 404)
+        self.assertEqual(self.client.post(action).status_code, 400)
+        files = job_directory(self.job.id) / "files"
+        (files / "clip-01.jpg").write_bytes(b"\xff\xd8thumbnail\xff\xd9")
+        self.assertEqual(self.client.post(action).status_code, 200)
+        self.assertEqual(self.client.post(action).status_code, 409)
+
+        def rejected(request):
+            if request.method == "GET":
+                return httpx.Response(200, json={"items": [{"status": {"uploadStatus": "processed"}}]})
+            self.assertTrue(request.url.path.endswith("/thumbnails/set"))
+            return httpx.Response(403)
+
+        self.run_with(rejected)
+        post.refresh_from_db()
+        self.assertEqual(post.status, Publication.Status.COMPLETE)
+        self.assertEqual(post.options["thumbnail_state"], "failed")
+        self.assertIn("custom thumbnail access", post.message)
+        self.assertEqual(post.url, "https://www.youtube.com/watch?v=video123")
+        refresh = self.client.post(action)
+        self.assertEqual(refresh.status_code, 200)
+        self.assertEqual(refresh.json()["status"], "processing")
+
     def test_tiktok_reports_inbox_then_checks_status_without_sending_again(self):
         post = self.queue("tiktok")
 
@@ -238,6 +321,8 @@ class PublishingTests(TestCase):
         self.assertEqual(post.status, "complete")
 
     def test_instagram_resumes_status_after_ambiguous_publish_without_reposting(self):
+        self.job.clips[0].update(thumbnail_design={"frame": 1}, thumbnail_options=[{"time": 0.1}, {"time": 2.75}])
+        self.job.save(update_fields=["clips"])
         post = self.queue("instagram")
         phases = iter(["IN_PROGRESS", "FINISHED", "PUBLISHED"])
         sends = []
@@ -247,6 +332,7 @@ class PublishingTests(TestCase):
                 self.assertEqual(request.read(), b"example video")
                 return httpx.Response(200, json={"success": True})
             if request.url.path.endswith("/media"):
+                self.assertEqual(json.loads(request.content)["thumb_offset"], "2750")
                 return httpx.Response(200, json={"id": "ig123"})
             if request.url.path.endswith("/media_publish"):
                 sends.append(request.url.path)

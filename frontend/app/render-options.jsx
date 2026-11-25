@@ -13,6 +13,14 @@ const qualities = [["480", "480p"], ["720", "720p"], ["1080", "1080p"]];
 const framings = [["auto", "Smart framing"], ["stream", "Screen + streamer"], ["center", "Center crop"], ["fit", "Fit with blur"]];
 const captionStyles = [["classic", "Classic captions"], ["highlight", "Highlighted words"], ["off", "Off"]];
 const selectionModes = [["count", "By clip count"], ["score", "By viral score"]];
+const gameplaySelection = [["count", "By clip count"], ["score", "By activity score"]];
+export const editingStyles = {
+  balanced: ["Balanced", "Finds standalone moments and follows your framing and caption settings."],
+  fast: ["Fast Cuts", "Looks for a quick hook and payoff, tightens quiet gaps, and uses shorter caption groups."],
+  podcast: ["Podcast", "Keeps question-and-answer context, steadies framing, and levels speech."],
+  gameplay: ["Gameplay", "Finds screen action locally and keeps the game in view. A stable webcam can sit above it."],
+  tutorial: ["Tutorial", "Keeps the full demonstration in frame and looks for a complete step and result."],
+};
 export const studioModes = [["shorts", "Short Clips"], ["highlights", "Highlights"]];
 const highlightMethods = [["transcript", "AI transcript"], ["activity", "Local visual activity"]];
 
@@ -84,6 +92,8 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
   const id = useId();
   const { clip_count: count, aspect_ratio: ratio, quality, language, framing, caption_style } = value;
   const { selection_mode, min_viral_score, min_clip_seconds, max_clip_seconds } = value;
+  const style = value.editing_style || "balanced";
+  const gameplay = style === "gameplay";
   const byScore = selection_mode === "score";
   const selectedLanguage = languages.find(([code]) => code === language);
   const languageOptions = selectedLanguage ? languages : [...languages, [language, language.toUpperCase()]];
@@ -92,14 +102,20 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
 
   return (
     <>
+      <div className="clip-edit-style">
+        <SelectField label="Editing style" value={style}
+          choices={Object.entries(editingStyles).map(([key, [label]]) => [key, label])}
+          onChange={(editing_style) => onChange({ editing_style })} />
+        <small className="selection-hint">{editingStyles[style][1]}</small>
+      </div>
       <div className="clip-selection">
-        <SelectField label="Clip selection" value={selection_mode} choices={selectionModes}
+        <SelectField label="Clip selection" value={selection_mode} choices={gameplay ? gameplaySelection : selectionModes}
           onChange={(next) => onChange({ selection_mode: next, min_viral_score: min_viral_score ?? 80 })} />
       </div>
       <div className="options">
         {byScore ? (
           <div>
-            <label htmlFor={`${id}-viral-score`}>Minimum viral score</label>
+            <label htmlFor={`${id}-viral-score`}>{gameplay ? "Minimum activity score" : "Minimum viral score"}</label>
             <div className="input-wrap number-with-unit">
               <input id={`${id}-viral-score`} type="number" min={0} max={100} required
                 value={min_viral_score ?? ""} aria-describedby={`${id}-viral-hint`}
@@ -122,7 +138,9 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
         {showQuality && <SelectField label="Source quality" value={quality} choices={qualities}
           onChange={(next) => onChange({ quality: next })} />}
       </div>
-      {byScore && <small className="selection-hint" id={`${id}-viral-hint`}>Keeps every ranked highlight at or above this score.</small>}
+      {byScore && <small className="selection-hint" id={`${id}-viral-hint`}>{gameplay
+        ? "Activity scores come from on-screen motion and changes in audio."
+        : "Keeps every ranked highlight at or above this score."}</small>}
       <fieldset className="ratio-field">
         <legend>Aspect ratio</legend>
         <div className="ratio-options">

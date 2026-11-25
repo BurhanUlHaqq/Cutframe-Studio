@@ -11,6 +11,42 @@ PLACEHOLDERS = {
     "clip", "highlight", "short", "untitled", "untitled highlight",
     "viral clip", "viral moment", "video clip", "an interesting moment",
 }
+GENERIC_HASHTAGS = {"viral", "fyp", "foryou", "foryoupage", "trending", "shorts", "reels", "explorepage"}
+HASHTAG = re.compile(r"(?<!\w)#([^\s#.,!?;:()<>]+)")
+
+
+def normalize_hashtags(values):
+    if not isinstance(values, (list, tuple)):
+        return []
+    tags, keys = [], set()
+    for item in values[:24]:
+        if not isinstance(item, str):
+            continue
+        name = "".join(item.strip().removeprefix("#").split())
+        name = unicodedata.normalize("NFC", name)
+        if not (2 <= len(name) <= 40 and any(char.isalpha() for char in name)
+                and all(char.isalnum() or char == "_" or unicodedata.category(char).startswith("M") for char in name)):
+            continue
+        key = name.casefold()
+        if key not in keys and key not in GENERIC_HASHTAGS:
+            keys.add(key)
+            tags.append(f"#{name}")
+        if len(tags) == 5:
+            break
+    return tags
+
+
+def description_with_hashtags(description, suggestions, *, limit=1200):
+    """Append a short, editable hashtag line when the ranker supplied topics."""
+    if not suggestions:
+        return description[:limit]
+    existing = {tag.casefold() for tag in HASHTAG.findall(description)}
+    tags = [tag for tag in normalize_hashtags(suggestions) if tag[1:].casefold() not in existing]
+    tags = tags[:max(0, 5 - len(existing))]
+    if not tags:
+        return description[:limit]
+    line = " ".join(tags)
+    return f"{description[:limit - len(line) - 2].rstrip()}\n\n{line}".strip()
 
 
 def _plain_text(value, label=""):

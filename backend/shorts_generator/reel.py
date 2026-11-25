@@ -14,6 +14,7 @@ from .local.llm import PROVIDERS, RankingConfigurationError, ranking_client
 from .local.media import validate_local_video
 from .local.reel import render_reel
 from .pipeline import prepare_source, progress_reporter, transcribe_source
+from .publication import normalize_hashtags
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class Moment:
     end: float
     title: str
     score: float
+    hashtags: tuple[str, ...] = ()
 
     @property
     def duration(self):
@@ -66,7 +68,8 @@ Skip welcomes, housekeeping, sponsor reads, pauses, and repeated points. Keep or
 Start and end on complete thoughts. Use timestamp values from this section, in seconds.
 Aim for {nominal:.0f} seconds per moment. Each should last between 10 and {maximum:.0f} seconds.
 Score importance to the source from 1 to 100, not short-form virality. Label the actual event in the spoken language.
-Return JSON only: {{"moments":[{{"start_time":12.3,"end_time":42.5,"title":"Specific event","score":90}}]}}
+For each moment, suggest up to three hashtags for named topics actually present in that excerpt.
+Return JSON only: {{"moments":[{{"start_time":12.3,"end_time":42.5,"title":"Specific event","score":90,"hashtags":["SpecificTopic"]}}]}}
 If no useful moments are present, return {{"moments":[]}}.
 
 TRANSCRIPT
@@ -94,7 +97,7 @@ TRANSCRIPT
             start = nearby_boundary(starts, start, max(0, end - maximum), end - 10)
             end = nearby_boundary(ends, end, start + 10, min(boundary, start + maximum))
             if 10 <= end - start <= maximum and any(line["start"] < end and line["end"] > start for line in lines + context):
-                candidates.append(Moment(start, end, title, score))
+                candidates.append(Moment(start, end, title, score, tuple(normalize_hashtags(item.get("hashtags")))))
     return candidates
 
 
@@ -210,5 +213,9 @@ def generate_highlight_reel(youtube_url, *, out_dir, minutes, method, uploaded_v
     description = (f"Highlights from {title_source}." if title_source else "Highlights from the original video.")
     if named_moments:
         description += "\n\n" + " · ".join(named_moments[:5])
-    return [render_reel(source, Path(out_dir), moments, segments, quality, caption_style, has_audio,
-                        video_stream, title, description, strongest, report)]
+    result = render_reel(source, Path(out_dir), moments, segments, quality, caption_style, has_audio,
+                         video_stream, title, description, strongest, report)
+    result["hashtags"] = normalize_hashtags([
+        tag for moment in sorted(moments, key=lambda moment: moment.score, reverse=True) for tag in moment.hashtags
+    ])
+    return [result]

@@ -2,6 +2,7 @@ import json
 import re
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from django.conf import settings
@@ -14,17 +15,25 @@ from django.utils import timezone
 from django.utils.text import slugify
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST, require_http_methods, require_safe
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 from shorts_generator.local.llm import RankingConfigurationError, RankingModelUnavailable, check_connection, list_ranking_models
+from shorts_generator.local.cover_design import CoverDesignError, design_cover
+from shorts_generator.local.thumbnails import create_thumbnail_set
 
 from .ai_settings import (
     AISettingsForm, ModelDiscoveryForm, ai_settings_data, installation_ai, installation_options,
     merge_ai_options, merge_installation, resolve_ai_options, saved_ai_options,
 )
-from .exports import clip_text, job_directory, open_archive, open_published_video, publication_filename
-from .forms import ClipTextForm, JobForm, PreferencesForm, StorageSettingsForm, UploadJobForm
-from .models import InstallationSettings, PREFERENCE_FIELDS, RENDER_OPTIONS, Job, StudioMode, WorkspaceAISettings, WorkspacePreferences
+from .exports import (clip_text, job_directory, open_archive, open_published_video, publication_filename,
+                      save_thumbnail_content, set_ai_thumbnail, store_thumbnail_options, thumbnail_filename,
+                      thumbnail_reference)
+from .forms import ClipTextForm, JobForm, PreferencesForm, StorageSettingsForm, ThumbnailDesignForm, UploadJobForm
+from .models import (InstallationSettings, PREFERENCE_FIELDS, RENDER_OPTIONS, Job, StudioMode,
+                     WorkspaceAISettings, WorkspacePreferences, WorkspaceThumbnailSettings)
+from .thumbnail_ai import (DEFAULTS as THUMBNAIL_DEFAULTS, ThumbnailAISettingsForm, ThumbnailGenerationError,
+                           ThumbnailGenerationForm, image_provider, make_ai_cover, merge_thumbnail_ai,
+                           saved_thumbnail_ai, thumbnail_settings_data)
 from .uploads import MIB, VIDEO_EXTENSIONS, store_upload, upload_limit
 
 
@@ -36,13 +45,25 @@ def render_data(job, *, include_activity=True):
             for kind in ("video", "thumbnail", "text")
         }
         media["edit_url"] = reverse("edit_clip", args=[job.id, index])
+        if clip.get("thumbnail_file"):
+            media["thumbnail_url"] += f"?v={clip['thumbnail_file']}"
+        if include_activity:
+            media["thumbnail_editor_url"] = reverse("edit_thumbnail", args=[job.id, index, "frames"])
+            media["thumbnail_options"] = [
+                {"time": choice["time"], "url": reverse("media", args=[job.id, index, f"thumbnail-frame-{number}"])}
+                for number, choice in enumerate(clip.get("thumbnail_options", []))
+            ]
+            for action in ("save", "preview", "generate"):
+                media[f"thumbnail_{action}_url"] = reverse("edit_thumbnail", args=[job.id, index, action])
         if clip.get("has_captions"):
             media["captions_url"] = reverse("media", args=[job.id, index, "captions"])
-        clips.append({key: value for key, value in clip.items() if key not in {"name", "embedded_title"}} | media)
+        clips.append({key: value for key, value in clip.items()
+                      if key not in {"name", "embedded_title", "thumbnail_file", "thumbnail_options"}} | media)
     return {
         "id": str(job.id), "video_id": job.video_id, "source_url": job.source_url,
         "source_name": job.source_name, "source_type": "upload" if job.source_name else "youtube",
         "studio_mode": job.studio_mode, "highlight_minutes": job.highlight_minutes, "highlight_method": job.highlight_method,
+        "editing_style": job.editing_style,
         "selection_mode": job.selection_mode, "min_viral_score": job.min_viral_score,
         "clip_count": job.clip_count, "aspect_ratio": job.aspect_ratio, "quality": job.quality,
         "framing": job.framing, "caption_style": job.caption_style,
@@ -194,6 +215,21 @@ def ai_connection(request, *, discover=False):
 
 @require_http_methods(["GET", "POST"])
 @never_cache
+def thumbnail_ai_settings(request):
+    owner = request.session.get("studio_owner")
+    options = saved_thumbnail_ai(owner)
+    if request.method == "POST":
+        data, error = form_data(request, ThumbnailAISettingsForm, defaults=THUMBNAIL_DEFAULTS | options)
+        if error is not None:
+            return error
+        owner = ensure_owner(request)
+        options = merge_thumbnail_ai(data, options)
+        WorkspaceThumbnailSettings.objects.update_or_create(owner=owner, defaults={"config": options})
+    return JsonResponse(thumbnail_settings_data(owner, options))
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
 def storage_settings(request):
     if request.method == "POST":
         data, error = form_data(request, StorageSettingsForm)
@@ -288,6 +324,93 @@ def edit_clip(request, job_id, index):
     return JsonResponse(render_data(job))
 
 
+@require_POST
+@never_cache
+def edit_thumbnail(request, job_id, index, action):
+    job = owned_job(request, job_id)
+    if job.status != Job.Status.COMPLETE or index >= len(job.clips):
+        raise Http404
+    if action == "generate":
+        return generate_saved_thumbnail(request, job, index)
+    if action not in {"frames", "preview", "save"}:
+        raise Http404
+    directory = job_directory(job.id)
+    files = directory / "files"
+    with FileLock(directory / "metadata.lock"):
+        job.refresh_from_db(fields=["clips"])
+        clip = job.clips[index]
+        choices = clip.get("thumbnail_options", [])
+        if action == "frames":
+            if choices:
+                return JsonResponse(render_data(job))
+            video = files / f"{clip['name']}.mp4"
+            if not video.is_file():
+                raise Http404
+            with TemporaryDirectory(prefix=".thumbnail-", dir=directory) as staging:
+                work = Path(staging).resolve()
+                try:
+                    choices, _ = create_thumbnail_set(video, work / "cover.jpg", aspect_ratio=job.aspect_ratio,
+                                                      main_screen=job.framing == "stream" and job.aspect_ratio == "9:16")
+                except (OSError, RuntimeError):
+                    return JsonResponse({"error": "Cutframe could not read frames from this render."}, status=422)
+                clip["thumbnail_options"] = store_thumbnail_options(files, clip["name"], choices, work)
+        else:
+            data, error = form_data(request, ThumbnailDesignForm)
+            if error is not None:
+                return error
+            if data["frame"] >= len(choices):
+                return JsonResponse({"error": "Choose an available thumbnail frame."}, status=400)
+            choice = choices[data["frame"]]
+            placement = choice["placement"] if data["placement"] == "auto" else data["placement"]
+            try:
+                cover = design_cover(files / choice["file"], headline=data["headline"], accent=data["accent"],
+                                     placement=placement)
+            except CoverDesignError as exc:
+                return JsonResponse({"error": str(exc)}, status=400)
+            except OSError:
+                return JsonResponse({"error": "The thumbnail frame is unavailable."}, status=404)
+            if action == "preview":
+                return HttpResponse(cover, content_type="image/jpeg")
+            clip["thumbnail_file"] = save_thumbnail_content(files, clip["name"], cover)
+            clip["thumbnail_design"] = data
+            clip.pop("thumbnail_model", None)
+            clip.pop("thumbnail_source", None)
+        job.save(update_fields=["clips", "updated_at"])
+    return JsonResponse(render_data(job))
+
+
+def generate_saved_thumbnail(request, job, index):
+    data, error = form_data(request, ThumbnailGenerationForm)
+    if error is not None:
+        return error
+    options = saved_thumbnail_ai(job.owner)
+    if not options.get("provider"):
+        return JsonResponse({"error": "Choose an image model in Settings → Thumbnails first."}, status=400)
+    directory = job_directory(job.id)
+    files = directory / "files"
+    if not files.is_dir():
+        raise Http404
+    try:
+        with FileLock(directory / f"generate-thumbnail-{index}.lock", timeout=0):
+            job.refresh_from_db(fields=["clips"])
+            clip = job.clips[index]
+            provider = image_provider(job.owner, options)
+            cover = make_ai_cover(provider, clip, job.aspect_ratio, directory,
+                                  reference=thumbnail_reference(files, clip), direction=data["direction"])
+            with FileLock(directory / "metadata.lock"):
+                job.refresh_from_db(fields=["clips"])
+                current = job.clips[index]
+                if current != clip:
+                    return JsonResponse({"error": "This clip changed during generation. Refresh and try again."}, status=409)
+                set_ai_thumbnail(files, current, cover, provider.model)
+                job.save(update_fields=["clips", "updated_at"])
+    except Timeout:
+        return JsonResponse({"error": "A thumbnail is already being generated for this clip."}, status=409)
+    except ThumbnailGenerationError as exc:
+        return JsonResponse({"error": str(exc)}, status=422)
+    return JsonResponse(render_data(job))
+
+
 @require_safe
 @never_cache
 def archive(request, job_id):
@@ -345,16 +468,29 @@ def range_response(request, path):
 def media(request, job_id, index, kind):
     job = owned_job(request, job_id)
     suffixes = {"video": ".mp4", "thumbnail": ".jpg", "text": ".txt", "captions": ".srt"}
-    if job.status != Job.Status.COMPLETE or index >= len(job.clips) or kind not in suffixes:
+    if job.status != Job.Status.COMPLETE or index >= len(job.clips):
         raise Http404
     clip = job.clips[index]
     download = request.GET.get("download") == "1"
+    frame = re.fullmatch(r"thumbnail-frame-([0-2])", kind)
+    if frame:
+        choices = clip.get("thumbnail_options", [])
+        number = int(frame[1])
+        if number >= len(choices):
+            raise Http404
+        path = job_directory(job.id) / "files" / choices[number]["file"]
+        if not path.is_file():
+            raise Http404
+        title = f"{publication_filename(clip['title'])} - Frame {number + 1}.jpg"
+        return FileResponse(path.open("rb"), as_attachment=download, filename=title, content_type="image/jpeg")
+    if kind not in suffixes:
+        raise Http404
     title_based = publication_filename(clip["title"]) + suffixes[kind]
     if kind == "text":
         return FileResponse(BytesIO(clip_text(clip)), as_attachment=True, filename=title_based)
     if kind == "captions" and not clip.get("has_captions"):
         raise Http404
-    filename = clip["name"] + suffixes[kind]
+    filename = thumbnail_filename(clip) if kind == "thumbnail" else clip["name"] + suffixes[kind]
     path = job_directory(job.id) / "files" / filename
     if not path.is_file():
         raise Http404

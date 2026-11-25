@@ -201,6 +201,7 @@ class StudioTests(TestCase):
 
 class WorkspacePreferencesTests(TestCase):
     data = {
+        "editing_style": "balanced",
         "studio_mode": "shorts", "highlight_minutes": 10, "highlight_method": "transcript",
         "clip_count": 3, "aspect_ratio": "1:1", "quality": "1080", "language": "ur",
         "selection_mode": "count", "min_viral_score": 80,
