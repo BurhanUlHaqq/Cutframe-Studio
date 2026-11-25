@@ -1,0 +1,122 @@
+"""Ingest, transcribe, rank, and render shorts on the local machine."""
+from pathlib import Path
+from shutil import which
+from typing import Callable, Dict, List, Optional
+
+from .highlights import get_highlights
+from .local.clipper import crop_highlights_local
+from .local.downloader import download_youtube_local
+from .local.llm import PROVIDERS, RankingConfig, ranking_client, ranking_config
+from .local.media import validate_local_video
+from .local.transcriber import transcribe_local
+
+
+class NoMatchingHighlights(ValueError):
+    pass
+
+
+def _clock(seconds):
+    minutes, remainder = divmod(round(seconds), 60)
+    return f"{minutes}:{remainder:02d}"
+
+
+def generate_shorts(
+    youtube_url: str,
+    *,
+    out_dir: str,
+    uploaded_video: Optional[Path] = None,
+    ranking: Optional[RankingConfig] = None,
+    whisper_model: Optional[str] = None,
+    num_clips: int = 3,
+    min_viral_score: Optional[int] = None,
+    clip_length: tuple[int | None, int | None] = (None, None),
+    aspect_ratio: str = "9:16",
+    framing: str = "auto",
+    caption_style: str = "classic",
+    download_format: str = "720",
+    language: Optional[str] = None,
+    on_progress: Optional[Callable[..., None]] = None,
+) -> List[Dict]:
+    """Render ranked highlights by count or score from a URL or an uploaded video."""
+    ranking = ranking or ranking_config()
+    ranking.validate()
+    if which("ffmpeg") is None:
+        raise RuntimeError("FFmpeg is required to render shorts. Install it and add it to your PATH.")
+
+    def report(stage: str, percent: int, message: str, event: bool = True) -> None:
+        if on_progress is not None:
+            on_progress(stage, percent, message, event=event)
+
+    if uploaded_video is None:
+        report("download", 5, "Fetching source information from YouTube")
+
+        def download_progress(received, total):
+            amount = f"{received / 1024**2:.1f} MB"
+            if total:
+                amount += f" of {total / 1024**2:.1f} MB"
+            report("download", 5 + min(20, 20 * received // total) if total else 5,
+                   f"Receiving a source stream · {amount}", event=False)
+
+        source_path = download_youtube_local(youtube_url, fmt=download_format, out_dir=out_dir, on_bytes=download_progress)
+        report("download", 26, "YouTube source is ready")
+    else:
+        report("download", 5, "Checking the uploaded video and audio tracks")
+        validate_local_video(uploaded_video)
+        source_path = str(uploaded_video)
+        report("download", 26, "Uploaded video is ready")
+
+    report("transcribe", 28, "Preparing audio and the local Whisper model")
+    transcript = transcribe_local(
+        source_path, language=language, out_dir=out_dir,
+        allow_legacy=caption_style == "off" and not whisper_model, whisper_model=whisper_model,
+        on_progress=lambda done, total: report(
+            "transcribe", 29 + int(24 * done / total),
+            f"Transcribing speech · {_clock(done)} of {_clock(total)}", event=False,
+        ),
+    )
+    if not transcript["segments"]:
+        raise RuntimeError(
+            "Whisper produced no segments. The video may have no detectable speech."
+        )
+
+    duration = transcript["duration"]
+    report("transcribe", 54, f"Transcript ready · {len(transcript['segments'])} segments across {_clock(duration)}")
+    minimum, maximum = clip_length
+    if minimum and duration < minimum:
+        report("rank", 55, f"The source is {_clock(duration)} long. Using the available duration.")
+    report("rank", 56, f"Analyzing the transcript with {PROVIDERS[ranking.provider][0]}")
+    with ranking_client(ranking) as rank:
+        highlights_result = get_highlights(
+            transcript, num_clips=num_clips, llm_fn=rank, clip_length=clip_length, min_viral_score=min_viral_score,
+            on_section=lambda index, total: report(
+                "rank", 58 + 10 * (index - 1) // total,
+                "Finding highlights" if total == 1 else f"Finding highlights · transcript section {index} of {total}",
+            ),
+        )
+    all_highlights: List[Dict] = highlights_result.get("highlights", [])
+    ranked = sorted(all_highlights, key=lambda highlight: highlight["score"], reverse=True)
+    if min_viral_score is not None:
+        top = [highlight for highlight in ranked if highlight["score"] >= min_viral_score]
+        report("rank", 69, f"{len(top)} highlights scored {min_viral_score} or higher")
+        if not top:
+            return []
+    elif ranked:
+        top = ranked[:num_clips]
+        report("rank", 69, f"Selected {len(top)} highlight{'s' if len(top) != 1 else ''}")
+    else:
+        message = "No usable highlights fit this clip length. Try a wider range." if minimum or maximum else (
+            "The ranking model found no usable highlights. Try another source or ranking model."
+        )
+        raise NoMatchingHighlights(message)
+
+    print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
+
+    return crop_highlights_local(
+        source_path, top, aspect_ratio=aspect_ratio, out_dir=out_dir,
+        framing=framing, caption_style=caption_style, segments=transcript["segments"],
+        on_activity=lambda index, total, message, portion, event: report(
+            "render", 70 + int(19 * (index - 1 + portion) / total),
+            f"Clip {index} of {total} · {message}", event=event,
+        ),
+    )
+

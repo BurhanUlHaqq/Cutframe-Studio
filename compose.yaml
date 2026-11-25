@@ -1,0 +1,58 @@
+name: cutframe-studio
+
+x-django: &django
+  image: cutframe-studio-backend
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - type: bind
+      source: "${STUDIO_DATA_PATH:-D:/volumes/Cutframe}"
+      target: /data
+      bind:
+        create_host_path: false
+  init: true
+  restart: unless-stopped
+
+services:
+  backend:
+    <<: *django
+    build:
+      context: backend
+      args:
+        UV_DEFAULT_INDEX: ${CUTFRAME_PYPI_INDEX:-https://pypi.org/simple}
+    environment:
+      STUDIO_DATA_DIR: /data
+      DJANGO_CSRF_TRUSTED_ORIGINS: "${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:${STUDIO_PORT:-5031},http://127.0.0.1:${STUDIO_PORT:-5031}}"
+    ports:
+      - "127.0.0.1:${STUDIO_API_PORT:-5032}:8000"
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+      exec gunicorn studio.wsgi:application --bind 0.0.0.0:8000
+      --workers 2 --threads 4 --timeout 120"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  worker:
+    <<: *django
+    pull_policy: never
+    environment:
+      STUDIO_DATA_DIR: /data
+      HF_HOME: /data/huggingface
+    command: ["python", "manage.py", "process_jobs"]
+    depends_on:
+      backend:
+        condition: service_healthy
+  frontend:
+    build:
+      context: frontend
+    image: cutframe-studio-frontend
+    ports:
+      - "127.0.0.1:${STUDIO_PORT:-5031}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped

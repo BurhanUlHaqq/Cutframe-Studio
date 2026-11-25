@@ -4,5 +4,8 @@ __pycache__/
 .venv/
 venv/
 output/
+.studio/
+node_modules/
+.next/
 *.mp4
 .DS_Store
