@@ -9,10 +9,11 @@ import {
 } from "lucide-react";
 import { api, stages, statusLabels, submit } from "../../api";
 import { usePreferences } from "../../preferences";
-import { editingStyles } from "../../render-options";
+import { editingStyles, SelectField } from "../../render-options";
 import ThumbnailEditor from "./thumbnail-editor";
 
-const terminal = new Set(["complete", "failed"]);
+const terminal = new Set(["complete", "failed", "deleting"]);
+const descriptionTargets = [["social", "General social"], ["youtube", "YouTube"], ["instagram", "Instagram Reels"], ["tiktok", "TikTok"]];
 const eventTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
 function formatTime(seconds) {
@@ -46,6 +47,9 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
   const [copyState, setCopyState] = useState("");
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [writing, setWriting] = useState(false);
+  const [platform, setPlatform] = useState("social");
+  const [draftModel, setDraftModel] = useState("");
   const [editError, setEditError] = useState("");
   const [editingCover, setEditingCover] = useState(false);
   const editId = useId();
@@ -86,6 +90,22 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
     }
   }
 
+  async function regenerateDescription() {
+    if (saving || writing) return;
+    setWriting(true);
+    setEditError("");
+    setDraftModel("");
+    try {
+      const result = await submit(clip.description_draft_url, { ...draft, platform });
+      setDraft((previous) => ({ ...previous, description: result.description }));
+      setDraftModel(result.model);
+    } catch (failure) {
+      setEditError(Object.values(failure.fields || {})[0]?.[0]?.message || failure.message);
+    } finally {
+      setWriting(false);
+    }
+  }
+
   return (
     <article className="panel clip-card">
       <div className="clip-player" style={{ "--clip-ratio": formattedRatio }}>
@@ -109,15 +129,27 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
         {draft ? (
           <form className="clip-editor" onSubmit={save}>
             <label htmlFor={`${editId}-title`}>Title</label>
-            <input id={`${editId}-title`} value={draft.title} required maxLength={100}
+            <input id={`${editId}-title`} value={draft.title} required maxLength={100} disabled={saving || writing}
               onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
             <label htmlFor={`${editId}-description`}>Description</label>
-            <textarea id={`${editId}-description`} value={draft.description} required maxLength={1200} rows={3}
+            <textarea id={`${editId}-description`} value={draft.description} required maxLength={1200} rows={5} disabled={saving || writing}
               onChange={(event) => setDraft({ ...draft, description: event.target.value })} />
+            {clip.description_draft_url && <fieldset className="control-group description-draft" disabled={saving || writing}>
+              <legend className="sr-only">AI description draft</legend>
+              <SelectField label="Description for" value={platform} choices={descriptionTargets} onChange={setPlatform} />
+              <div>
+                <button className="secondary-button" type="button" onClick={regenerateDescription}>
+                  <RotateCcw size={15} aria-hidden="true" /> {writing ? "Writing description…" : "Regenerate description"}
+                </button>
+                <Link href="/settings#description-settings-title">Change model</Link>
+              </div>
+            </fieldset>}
+            {(draftModel || writing) && <p className="muted description-draft-note" role="status">{writing ?
+              "Waiting for the description model…" : `Draft from ${draftModel}. Review it before saving.`}</p>}
             {editError && <p className="field-error" role="alert">{editError}</p>}
             <div className="clip-actions">
-              <button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save"}</button>
-              <button className="secondary-button" type="button" disabled={saving} onClick={() => setDraft(null)}>Cancel</button>
+              <button className="primary-button" disabled={saving || writing}>{saving ? "Saving…" : "Save"}</button>
+              <button className="secondary-button" type="button" disabled={saving || writing} onClick={() => setDraft(null)}>Cancel</button>
             </div>
           </form>
         ) : (
@@ -137,6 +169,7 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
               <button className="secondary-button" type="button" onClick={() => {
                 setDraft({ title: clip.title, description: clip.description });
                 setEditError("");
+                setDraftModel("");
               }}><Pencil size={16} aria-hidden="true" /> Edit</button>
               <button className="secondary-button" type="button" onClick={() => copy(true)}>
                 {copyState === "Title copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
@@ -219,7 +252,7 @@ export default function RenderDetails({ id }) {
     <div className="panel render-panel" role={error ? "alert" : "status"}>
       <h1>{error ? "Render unavailable" : "Loading render…"}</h1>
       {error && <p>{error}</p>}
-      {error && <Link href="/" className="secondary-button">Back to studio</Link>}
+      {error && <Link href="/library" className="secondary-button">Back to library</Link>}
     </div>
   );
 
@@ -282,7 +315,7 @@ export default function RenderDetails({ id }) {
                 </li>
               ))}
             </ol>
-            <p className="muted">You can close this page while the worker finishes. Find the result in Render history.</p>
+            <p className="muted">You can close this page while the worker finishes. Find the result in the Library.</p>
           </div>
         ) : noMatches ? (
           <p className="muted">No highlight reached {job.min_viral_score}{gameplay ? " on the activity score" : ""}. A lower minimum may return more clips.</p>

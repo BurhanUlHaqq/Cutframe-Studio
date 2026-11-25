@@ -14,7 +14,7 @@ from .local.llm import PROVIDERS, RankingConfigurationError, ranking_client
 from .local.media import validate_local_video
 from .local.reel import render_reel
 from .pipeline import prepare_source, progress_reporter, transcribe_source
-from .publication import normalize_hashtags
+from .publication import normalize_hashtags, speech_for_description
 
 
 @dataclass(frozen=True)
@@ -218,4 +218,8 @@ def generate_highlight_reel(youtube_url, *, out_dir, minutes, method, uploaded_v
     result["hashtags"] = normalize_hashtags([
         tag for moment in sorted(moments, key=lambda moment: moment.score, reverse=True) for tag in moment.hashtags
     ])
+    if segments:
+        samples = [moments[0], moments[len(moments) // 2], moments[-1]]
+        excerpts = [speech_for_description(segments, moment.start, moment.end, 300) for moment in samples]
+        result["description_context"] = " […] ".join(dict.fromkeys(filter(None, excerpts)))
     return [result]

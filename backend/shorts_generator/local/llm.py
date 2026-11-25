@@ -96,17 +96,22 @@ def _client(config, timeout, *, require_model=True):
 
 
 @contextmanager
-def ranking_client(config):
-    with _client(config, 180) as client:
+def ranking_client(config, *, timeout=180, output_tokens=None):
+    with _client(config, timeout) as client:
         def rank(prompt):
             if config.provider == "gemini":
                 response = client.models.generate_content(
                     model=config.model, contents=prompt,
-                    config={"response_mime_type": "application/json", "max_output_tokens": 8192},
+                    config={"response_mime_type": "application/json", "max_output_tokens": output_tokens or 8192},
                 )
                 return response.text or ""
+            limits = {}
+            if output_tokens:
+                field = "max_completion_tokens" if config.provider == "openai" else "max_tokens"
+                limits[field] = output_tokens
             response = client.chat.completions.create(
                 model=config.model, messages=[{"role": "user", "content": prompt}],
+                **limits,
             )
             return response.choices[0].message.content or ""
 

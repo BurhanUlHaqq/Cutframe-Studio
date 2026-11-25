@@ -5,6 +5,7 @@ import { Check, RotateCcw, Save } from "lucide-react";
 import { usePreferences } from "../preferences";
 import RenderOptions, { HighlightOptions, SelectField, studioModes } from "../render-options";
 import AISettings from "./ai-settings";
+import DescriptionSettings from "./description-settings";
 import PublishingSettings from "./publishing-settings";
 import StorageSettings from "./storage-settings";
 import ThumbnailAISettings from "./thumbnail-ai-settings";
@@ -91,7 +92,7 @@ function PreferencesPanel({ section, description, children }) {
 
 export default function SettingsForm() {
   const active = useSettingsSection();
-  const { render, models, thumbnails, publishing, storage, appearance } = settingsSections;
+  const { render, models, descriptions, thumbnails, publishing, storage, appearance } = settingsSections;
 
   useEffect(() => {
     if (window.location.hash !== `#${active.id}`) return;
@@ -129,6 +130,7 @@ export default function SettingsForm() {
       <div hidden={active !== models}>
         <AISettings />
       </div>
+      {active === descriptions && <DescriptionSettings />}
       <div hidden={active !== thumbnails}>
         <ThumbnailAISettings />
       </div>

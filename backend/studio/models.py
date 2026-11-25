@@ -66,6 +66,8 @@ class WorkspacePreferences(models.Model):
 class WorkspaceAISettings(models.Model):
     owner = models.UUIDField(primary_key=True, editable=False)
     config = models.JSONField(default=dict)
+    description_model = models.CharField(max_length=200, blank=True, default="")
+    description_automatic = models.BooleanField(default=False)
 
 
 class WorkspaceThumbnailSettings(models.Model):
@@ -85,6 +87,7 @@ class Job(models.Model):
         RUNNING = "running", "Rendering"
         COMPLETE = "complete", "Ready"
         FAILED = "failed", "Failed"
+        DELETING = "deleting", "Cleanup incomplete"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.UUIDField(db_index=True)

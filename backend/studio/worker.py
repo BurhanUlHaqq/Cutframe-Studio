@@ -13,6 +13,7 @@ from shorts_generator.pipeline import NoMatchingHighlights
 from shorts_generator.reel import generate_highlight_reel
 
 from .ai_settings import installation_ai, resolve_ai_options, saved_ai_options, transcription_options
+from .descriptions import BATCH_SIZE, DescriptionError, generate_descriptions, saved_description_options, writer_config
 from .exports import job_directory, make_export, set_ai_thumbnail, thumbnail_reference
 from .models import ClipSelection, HighlightMethod, Job, StudioMode
 from .thumbnail_ai import ThumbnailGenerationError, image_provider, make_ai_cover, saved_thumbnail_ai
@@ -43,6 +44,31 @@ def failure_message(stage, exc):
         "render": "The worker could not finish rendering the clips. Retry this render.",
         "export": "The worker could not package the clips. Check available disk space and retry.",
     }.get(stage, "The worker could not start this render. Check its configuration and retry.")
+
+
+def enrich_descriptions(job, shorts, ranking_options, installation, report):
+    options = saved_description_options(job.owner)
+    if not options["automatic"]:
+        return
+    try:
+        config = writer_config(options, ranking_options, installation)
+        config.validate()
+    except RankingConfigurationError as exc:
+        report("export", 92, f"AI descriptions unavailable. {exc}", level="warning")
+        return
+    ready = [clip for clip in shorts if clip.get("clip_url")]
+    for offset in range(0, len(ready), BATCH_SIZE):
+        batch = ready[offset:offset + BATCH_SIZE]
+        report("export", 92, f"Writing AI descriptions for videos {offset + 1}–{offset + len(batch)}")
+        try:
+            descriptions = generate_descriptions(config, batch, language=job.language)
+        except DescriptionError as exc:
+            report("export", 92, f"Kept the original descriptions. {exc}", level="warning")
+            return
+        for index, description in descriptions.items():
+            batch[index].update(description=description, hashtags=[])
+        if len(descriptions) < len(batch):
+            report("export", 92, "Some videos kept their original descriptions.", level="warning")
 
 
 def process_next_job():
@@ -121,6 +147,7 @@ def process_next_job():
                 report("render", 89, f"Clip {index} could not be rendered", level="warning")
         if successful:
             export_message = "Packaging the highlight reel" if reel else f"Packaging the ZIP with {successful} clip{'s' if successful != 1 else ''}"
+            enrich_descriptions(job, shorts, options, installation, report)
             provider = None
             covers = saved_thumbnail_ai(job.owner)
             if covers.get("provider") and covers.get("automatic"):

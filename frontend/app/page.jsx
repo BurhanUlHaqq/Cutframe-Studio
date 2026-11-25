@@ -55,7 +55,7 @@ export default function Studio() {
   useEffect(() => {
     const abort = new AbortController();
     api("jobs/", { signal: abort.signal })
-      .then((data) => { setHistory(data.jobs); setUpload(data.upload); })
+      .then((data) => { setHistory(data.jobs.slice(0, 5)); setUpload(data.upload); })
       .catch((error) => {
         if (error.name !== "AbortError") setHistoryError(error.message);
       });
@@ -200,7 +200,8 @@ export default function Studio() {
       </div>
 
       <section id="history" className="history" aria-labelledby="history-title">
-        <div className="section-heading"><h2 id="history-title">Render history</h2>{history?.length > 0 && <span>{history.length} recent</span>}</div>
+        <div className="section-heading"><h2 id="history-title">Recent renders</h2>
+          <Link href="/library" className="secondary-button">View library</Link></div>
         <div className="panel history-panel">
           {historyError ? <p className="empty-state" role="alert">{historyError}</p> :
             !history ? <p className="empty-state">Loading renders…</p> :

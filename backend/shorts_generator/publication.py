@@ -5,7 +5,7 @@ import unicodedata
 
 
 TITLE_LENGTH = 60
-DESCRIPTION_LENGTH = 300
+DESCRIPTION_LENGTH = 520
 SENTENCE = re.compile(r".+?(?:[.!?]+(?=\s|$)|[。！？؟।]+|$)")
 PLACEHOLDERS = {
     "clip", "highlight", "short", "untitled", "untitled highlight",
@@ -47,6 +47,17 @@ def description_with_hashtags(description, suggestions, *, limit=1200):
         return description[:limit]
     line = " ".join(tags)
     return f"{description[:limit - len(line) - 2].rstrip()}\n\n{line}".strip()
+
+
+def speech_for_description(segments, start, end, limit=960):
+    lines = [text for segment in segments if segment["start"] < end and segment["end"] > start
+             and (text := _plain_text(segment.get("text")))]
+    speech = " ".join(lines)
+    if len(speech) <= limit:
+        return speech
+    opening = speech[:limit // 2].rsplit(" ", 1)[0]
+    closing = speech[-(limit - len(opening) - 5):].split(" ", 1)[-1]
+    return f"{opening} […] {closing}"
 
 
 def _plain_text(value, label=""):

@@ -8,7 +8,9 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
+from filelock import Timeout
 
+from studio.exports import render_lock
 from studio.models import Job
 from studio.views import ensure_owner, form_data
 
@@ -34,7 +36,7 @@ def publication_data(post):
         "status": post.status, "progress": post.progress,
         "scheduled_at": post.scheduled_at, "started_at": post.started_at, "message": post.message, "url": post.url,
         "thumbnail_state": post.options.get("thumbnail_state", ""),
-        "can_apply_thumbnail": (post.platform == Platform.YOUTUBE and post.status == Status.COMPLETE
+        "can_apply_thumbnail": (bool(post.job_id) and post.platform == Platform.YOUTUBE and post.status == Status.COMPLETE
                                 and bool(youtube_video_id(post.url))),
     }
 
@@ -225,6 +227,15 @@ def posts(request):
     if not owner:
         raise Http404
     job = get_object_or_404(Job, pk=data["job_id"], owner=owner, status=Job.Status.COMPLETE)
+    try:
+        with render_lock(job.id):
+            job = get_object_or_404(Job, pk=job.pk, owner=owner, status=Job.Status.COMPLETE)
+            return queue_post(owner, job, data)
+    except Timeout:
+        return fail("This render is in use. Try again in a moment.", status=409)
+
+
+def queue_post(owner, job, data):
     platform = data["platform"]
     connection = Connection.objects.filter(owner=owner, platform=platform).first()
     account = next((account for account in connection.accounts if account["id"] == data["account_id"]), None) if connection else None
@@ -261,7 +272,7 @@ def posts(request):
         "options": options,
         "scheduled_at": now, "next_at": now, "message": "Approved and queued for transfer.",
     })
-    if post.owner != job.owner:
+    if post.owner != job.owner or post.job_id != job.id:
         return fail("This request identifier is unavailable.", status=409)
     return JsonResponse(publication_data(post), status=201 if created else 200)
 
@@ -271,8 +282,20 @@ def posts(request):
 def post_action(request, post_id, action):
     owner = request.session.get("studio_owner")
     record = Publication.objects.filter(owner=owner, pk=post_id)
-    if not record.exists():
+    post = record.first()
+    if post is None:
         raise Http404
+    if post.job_id is None:
+        return fail("The local render was deleted.", status=409)
+    try:
+        with render_lock(post.job_id):
+            record = record.filter(job_id=post.job_id, job__status=Job.Status.COMPLETE)
+            return change_post(record, action)
+    except Timeout:
+        return fail("This render is in use. Try again in a moment.", status=409)
+
+
+def change_post(record, action):
     if action == "thumbnail":
         return queue_existing_thumbnail(record)
     if action == "cancel":

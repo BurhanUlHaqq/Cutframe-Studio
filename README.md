@@ -80,7 +80,7 @@ Face detection runs locally with the bundled YuNet model. [OpenCV YuNet and its 
 
 ### Editing styles for Short Clips
 
-Choose a style for each render or save it under **Settings → Render defaults**. Explicit clip lengths, framing, and caption settings take precedence.
+Play the sample cards to compare styles, then choose one for a render or save it under **Settings → Render defaults**. Explicit clip lengths, framing, and caption settings take precedence.
 
 | Style | Selection and editing |
 | --- | --- |
@@ -100,7 +100,11 @@ Use the chapter list to jump to each moment and see its original timestamp. The 
 
 Open a finished render to play each clip and edit or copy its title and description. Download the MP4 by itself or in the ZIP. Both use the saved title as the filename and embed it as MP4 metadata. **Copy title** copies the exact title to paste into YouTube Studio’s Title field.
 
-New AI-ranked renders produce specific titles, short descriptions, and up to five topic hashtags in the clip's spoken language. Review or edit the description and hashtags before publishing. [AutoClip title prompt reference](https://github.com/artbyjazi/autoclip/blob/main/backend/autoclip/prompts/highlight_v1.txt) · [YouTube hashtag guidance](https://support.google.com/youtube/answer/6390658)
+New AI-ranked renders produce specific titles, descriptions grounded in the clip, and up to five topic hashtags in the clip's spoken language. [AutoClip title prompt reference](https://github.com/artbyjazi/autoclip/blob/main/backend/autoclip/prompts/highlight_v1.txt) · [YouTube hashtag guidance](https://support.google.com/youtube/answer/6390658)
+
+Open **Settings → Descriptions** to choose a writing model from your saved OpenAI, Gemini, or OpenAI-compatible text connection. Leave the model ID blank to use the ranking model. Automatic AI descriptions are opt-in and use one text model request per batch of up to 12 finished videos. Drafts use any available speech excerpts and chapter topics to put concrete, searchable details up front. [YouTube description guidance](https://support.google.com/youtube/answer/12948449)
+
+Open **Edit** on a finished clip and choose **Regenerate description** for general social, YouTube, Instagram Reels, or TikTok. Review and edit the draft before saving. Once saved, it is used in the TXT, ZIP, and future publishing drafts.
 
 ### Generate thumbnail artwork
 
@@ -117,6 +121,12 @@ Enable **Automatically generate covers for new renders** to generate one image p
 ```
 
 The ZIP uses the latest saved titles and descriptions. Captioned clips include the SRT file. Text edits reuse the rendered media and require zero ranking requests.
+
+## Organize and clean up the library
+
+Open **Library** to find old renders by clip title, source, mode, status, or age. Sort by size to find large renders, and use the ZIP button to keep a copy before deleting. **Select renders** lets you remove several items from the current page. The confirmation shows the files' combined size.
+
+Deletion removes the render, including its stored source copy, intermediate files, and exports. Queued or running renders and renders with active or scheduled publications are protected. Previously published videos and their publishing records stay available. If the operating system holds a file open, close the download and retry the **Cleanup incomplete** item in Library.
 
 ## Publish clips
 

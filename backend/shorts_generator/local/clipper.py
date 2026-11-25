@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from typing import Callable, Dict, List, Optional
 
 from ..edit_styles import STYLES
+from ..publication import speech_for_description
 from .captions import Cue, build_edited_cues, write_ass, write_srt
 from .pacing import Pace, plan_pacing, tighten_clip
 from .reframe import Framer
@@ -228,6 +229,8 @@ def crop_highlights_local(
             cues = build_edited_cues(segments or [], start, pace, editing_style) if caption_style != "off" else []
             thumbnail_path = Path(out_path).with_suffix(".jpg")
             result = {**h, "clip_url": out_path, "thumbnail_path": str(thumbnail_path)}
+            if segments:
+                result["description_context"] = speech_for_description(segments, start, end)
             if pace.removed:
                 result.update(duration_seconds=round(pace.runtime, 3), pauses_trimmed=len(pace.removed))
 

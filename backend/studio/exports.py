@@ -18,6 +18,11 @@ def job_directory(job_id):
     return settings.STUDIO_DATA_DIR / "jobs" / str(job_id)
 
 
+def render_lock(job_id):
+    # Keep the lifecycle lock outside the media directory so it survives deletion.
+    return FileLock(settings.STUDIO_DATA_DIR / ".render-locks" / f"{job_id}.lock", timeout=0)
+
+
 def publication_filename(title):
     """Preserve case and spaces while making the title safe on common filesystems."""
     name = " ".join(re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", title).split()).rstrip(".")
@@ -160,6 +165,8 @@ def make_export(job, shorts, *, generate_cover=None):
         }
         if "chapters" in short:
             metadata.update(chapters=short["chapters"], chapter_text=short["chapter_text"])
+        if short.get("description_context"):
+            metadata["description_context"] = short["description_context"]
         if short.get("pauses_trimmed"):
             metadata.update(duration_seconds=short["duration_seconds"], pauses_trimmed=short["pauses_trimmed"])
         if short.get("thumbnail_options"):

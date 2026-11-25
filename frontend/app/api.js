@@ -68,4 +68,5 @@ export const statusLabels = {
   running: "Processing",
   complete: "Ready",
   failed: "Failed",
+  deleting: "Cleanup incomplete",
 };

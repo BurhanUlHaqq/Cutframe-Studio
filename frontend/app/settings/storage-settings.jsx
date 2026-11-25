@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { HardDrive, Save } from "lucide-react";
 import { api, submit } from "../api";
 
@@ -44,6 +45,7 @@ export default function StorageSettings() {
         <div><h2 id="storage-settings-title" tabIndex={-1}>Storage</h2>
           <p>Set the maximum size of an uploaded video for this installation.</p></div>
       </div>
+      <Link href="/library?sort=largest" className="secondary-button storage-library-link">Manage render files</Link>
       {limit === null ? (error ? <><p className="field-error" role="alert">{error}</p>
         <button className="secondary-button settings-retry" type="button" onClick={() => {
           setError(""); setAttempt((n) => n + 1);

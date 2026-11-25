@@ -1,5 +1,6 @@
 import json
 import re
+from functools import wraps
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,7 +26,9 @@ from .ai_settings import (
     AISettingsForm, ModelDiscoveryForm, ai_settings_data, installation_ai, installation_options,
     merge_ai_options, merge_installation, resolve_ai_options, saved_ai_options,
 )
-from .exports import (clip_text, job_directory, open_archive, open_published_video, publication_filename,
+from .descriptions import (DescriptionDraftForm, DescriptionError, DescriptionSettingsForm, connection_info,
+                           generate_descriptions, saved_description_options, subtitle_excerpt, writer_config)
+from .exports import (clip_text, job_directory, open_archive, open_published_video, publication_filename, render_lock,
                       save_thumbnail_content, set_ai_thumbnail, store_thumbnail_options, thumbnail_filename,
                       thumbnail_reference)
 from .forms import ClipTextForm, JobForm, PreferencesForm, StorageSettingsForm, ThumbnailDesignForm, UploadJobForm
@@ -48,6 +51,7 @@ def render_data(job, *, include_activity=True):
         if clip.get("thumbnail_file"):
             media["thumbnail_url"] += f"?v={clip['thumbnail_file']}"
         if include_activity:
+            media["description_draft_url"] = reverse("draft_description", args=[job.id, index])
             media["thumbnail_editor_url"] = reverse("edit_thumbnail", args=[job.id, index, "frames"])
             media["thumbnail_options"] = [
                 {"time": choice["time"], "url": reverse("media", args=[job.id, index, f"thumbnail-frame-{number}"])}
@@ -58,7 +62,7 @@ def render_data(job, *, include_activity=True):
         if clip.get("has_captions"):
             media["captions_url"] = reverse("media", args=[job.id, index, "captions"])
         clips.append({key: value for key, value in clip.items()
-                      if key not in {"name", "embedded_title", "thumbnail_file", "thumbnail_options"}} | media)
+                      if key not in {"name", "embedded_title", "thumbnail_file", "thumbnail_options", "description_context"}} | media)
     return {
         "id": str(job.id), "video_id": job.video_id, "source_url": job.source_url,
         "source_name": job.source_name, "source_type": "upload" if job.source_name else "youtube",
@@ -81,6 +85,20 @@ def owned_job(request, job_id):
     if not owner:
         raise Http404
     return get_object_or_404(Job, pk=job_id, owner=owner)
+
+
+def render_operation(view):
+    @wraps(view)
+    def perform(request, job_id, *args, **kwargs):
+        job = owned_job(request, job_id)
+        try:
+            with render_lock(job.id):
+                return view(request, owned_job(request, job_id), *args, **kwargs)
+        except Timeout:
+            return JsonResponse({"error": "This render is busy. Try again when its current operation finishes."}, status=409)
+        except FileNotFoundError as exc:
+            raise Http404 from exc
+    return perform
 
 
 def ensure_owner(request):
@@ -215,6 +233,29 @@ def ai_connection(request, *, discover=False):
 
 @require_http_methods(["GET", "POST"])
 @never_cache
+def description_settings(request):
+    owner = request.session.get("studio_owner")
+    options = saved_description_options(owner)
+    if request.method == "POST":
+        options, error = form_data(request, DescriptionSettingsForm, defaults=options)
+        if error is not None:
+            return error
+        owner = ensure_owner(request)
+        WorkspaceAISettings.objects.update_or_create(owner=owner, defaults={
+            "description_model": options["model"], "description_automatic": options["automatic"],
+        })
+    connection = None
+    try:
+        config = writer_config(options, saved_ai_options(owner))
+        config.validate()
+        connection = connection_info(config)
+    except RankingConfigurationError:
+        pass
+    return JsonResponse({"settings": options, "connection": connection})
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
 def thumbnail_ai_settings(request):
     owner = request.session.get("studio_owner")
     options = saved_thumbnail_ai(owner)
@@ -244,7 +285,7 @@ def storage_settings(request):
 def jobs(request):
     owner = request.session.get("studio_owner")
     if request.method == "GET":
-        renders = Job.objects.filter(owner=owner)[:50] if owner else []
+        renders = Job.objects.filter(owner=owner).exclude(status=Job.Status.DELETING)[:50] if owner else []
         return JsonResponse({
             "jobs": [render_data(job, include_activity=False) for job in renders],
             "upload": {"max_bytes": upload_limit(), "extensions": VIDEO_EXTENSIONS},
@@ -294,8 +335,8 @@ def detail(request, job_id):
 
 @require_POST
 @never_cache
-def retry(request, job_id):
-    job = owned_job(request, job_id)
+@render_operation
+def retry(request, job):
     updated = Job.objects.filter(pk=job.pk, status=Job.Status.FAILED).update(
         status=Job.Status.QUEUED, stage="queue", progress=0, error="", activity="Retry queued",
         events=[*job.events[-39:], {"time": timezone.now().isoformat(), "stage": "queue",
@@ -310,8 +351,8 @@ def retry(request, job_id):
 
 @require_POST
 @never_cache
-def edit_clip(request, job_id, index):
-    job = owned_job(request, job_id)
+@render_operation
+def edit_clip(request, job, index):
     if job.status != Job.Status.COMPLETE or index >= len(job.clips):
         raise Http404
     data, error = form_data(request, ClipTextForm)
@@ -326,8 +367,36 @@ def edit_clip(request, job_id, index):
 
 @require_POST
 @never_cache
-def edit_thumbnail(request, job_id, index, action):
+def draft_description(request, job_id, index):
     job = owned_job(request, job_id)
+    if job.status != Job.Status.COMPLETE or index >= len(job.clips):
+        raise Http404
+    data, error = form_data(request, DescriptionDraftForm)
+    if error is not None:
+        return error
+    try:
+        config = writer_config(saved_description_options(job.owner), saved_ai_options(job.owner))
+        config.validate()
+    except RankingConfigurationError:
+        return JsonResponse({"error": "Connect a text provider in Settings → AI models, then choose a description model."}, status=422)
+    clip = dict(job.clips[index])
+    if not clip.get("description_context") and clip.get("has_captions"):
+        captions = job_directory(job.id) / "files" / f"{clip['name']}.srt"
+        clip["description_context"] = subtitle_excerpt(captions)
+    for field in ("title", "description"):
+        if data[field]:
+            clip[field] = data[field]
+    try:
+        drafts = generate_descriptions(config, [clip], platform=data["platform"] or "social", language=job.language)
+    except DescriptionError as exc:
+        return JsonResponse({"error": str(exc)}, status=422)
+    return JsonResponse({"description": drafts[0], "model": config.model})
+
+
+@require_POST
+@never_cache
+@render_operation
+def edit_thumbnail(request, job, index, action):
     if job.status != Job.Status.COMPLETE or index >= len(job.clips):
         raise Http404
     if action == "generate":
@@ -413,8 +482,8 @@ def generate_saved_thumbnail(request, job, index):
 
 @require_safe
 @never_cache
-def archive(request, job_id):
-    job = owned_job(request, job_id)
+@render_operation
+def archive(request, job):
     if job.status != Job.Status.COMPLETE or not job.clips:
         raise Http404
     try:
@@ -426,15 +495,22 @@ def archive(request, job_id):
     return FileResponse(handle, as_attachment=True, filename=f"{prefix}-{source}.zip")
 
 
-def stream_range(path, start, remaining):
-    with path.open("rb") as handle:
-        handle.seek(start)
-        while remaining:
-            chunk = handle.read(min(64 * 1024, remaining))
+class VideoByteRange:
+    def __init__(self, path, start, length):
+        self.handle = path.open("rb")
+        self.handle.seek(start)
+        self.remaining = length
+
+    def __iter__(self):
+        while self.remaining:
+            chunk = self.handle.read(min(64 * 1024, self.remaining))
             if not chunk:
-                break
+                return
+            self.remaining -= len(chunk)
             yield chunk
-            remaining -= len(chunk)
+
+    def close(self):
+        self.handle.close()
 
 
 def range_response(request, path):
@@ -457,7 +533,7 @@ def range_response(request, path):
             if request.method == "HEAD":
                 return HttpResponse(status=206, content_type="video/mp4", headers=headers)
             return StreamingHttpResponse(
-                stream_range(path, start, end - start + 1), status=206,
+                VideoByteRange(path, start, end - start + 1), status=206,
                 content_type="video/mp4", headers=headers,
             )
     return HttpResponse(status=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
@@ -466,7 +542,20 @@ def range_response(request, path):
 @require_safe
 @never_cache
 def media(request, job_id, index, kind):
-    job = owned_job(request, job_id)
+    if kind == "video" and request.GET.get("download") == "1":
+        return download_video(request, job_id, index)
+    try:
+        return render_media(request, owned_job(request, job_id), index, kind)
+    except FileNotFoundError as exc:
+        raise Http404 from exc
+
+
+@render_operation
+def download_video(request, job, index):
+    return render_media(request, job, index, "video")
+
+
+def render_media(request, job, index, kind):
     suffixes = {"video": ".mp4", "thumbnail": ".jpg", "text": ".txt", "captions": ".srt"}
     if job.status != Job.Status.COMPLETE or index >= len(job.clips):
         raise Http404

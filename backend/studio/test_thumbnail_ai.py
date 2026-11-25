@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -8,7 +9,7 @@ from zipfile import ZipFile
 
 import httpx
 from PIL import Image
-from django.test import Client, TestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from publishing.models import Platform
@@ -16,6 +17,8 @@ from publishing.thumbnails import cover_options
 
 from .exports import job_directory
 from .models import Job, WorkspaceThumbnailSettings
+from .thumbnail_ai import ImageProvider, make_ai_cover
+from .worker import process_next_job
 
 
 def image(color):
@@ -43,7 +46,8 @@ class AIThumbnailTests(TestCase):
         with TemporaryDirectory() as temporary, override_settings(STUDIO_DATA_DIR=Path(temporary)):
             clip = {"name": "clip-01", "title": "Game Point", "embedded_title": "Game Point",
                     "description": "The winner takes the last point."}
-            job = Job.objects.create(owner=owner, source_name="Match.mp4", status=Job.Status.COMPLETE, clips=[clip])
+            job = Job.objects.create(owner=owner, source_name="Match.mp4", status=Job.Status.COMPLETE,
+                                     clip_count=1, aspect_ratio="9:16", quality="720", clips=[clip])
             files = job_directory(job.id) / "files"
             files.mkdir(parents=True)
             (files / "clip-01.mp4").write_bytes(b"video fixture")
@@ -94,3 +98,61 @@ class AIThumbnailTests(TestCase):
                 self.assertIn("quota", failed.json()["error"])
                 job.refresh_from_db()
                 self.assertEqual(job.clips[0]["thumbnail_file"], approved["thumbnail_file"])
+
+    def test_worker_can_generate_automatically_before_creating_the_zip(self):
+        self.client.get(reverse("session"))
+        owner = self.client.session["studio_owner"]
+        response = self.client.post(reverse("thumbnail_ai_settings"), {
+            "provider": "compatible", "model": "fixture", "base_url": "http://127.0.0.1:7860/v1", "automatic": True,
+        }, content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        with TemporaryDirectory() as temporary, override_settings(STUDIO_DATA_DIR=Path(temporary)):
+            job = Job.objects.create(owner=owner, source_name="Game.mp4", editing_style="gameplay",
+                                     clip_count=1, aspect_ratio="9:16", quality="720")
+            work = job_directory(job.id) / "work"
+            work.mkdir(parents=True)
+            video = work / "clip.mp4"
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=180x320:r=15:d=1",
+                "-c:v", "libx264", str(video),
+            ], check=True, capture_output=True)
+            fixture = work / "cover.jpg"
+            fixture.write_bytes(image("green"))
+            new_cover = image("orange")
+            with patch("studio.worker.generate_shorts", return_value=[{
+                "clip_url": str(video), "thumbnail_path": str(fixture), "title": "Game Point",
+                "score": 90, "start_time": 0, "end_time": 1,
+            }]), patch("studio.worker.make_ai_cover", return_value=new_cover) as generate:
+                process_next_job()
+            generate.assert_called_once()
+            job.refresh_from_db()
+            self.assertEqual(job.status, Job.Status.COMPLETE, job.error)
+            self.assertEqual(job.clips[0]["thumbnail_source"], "ai")
+            self.assertIn("Generating AI cover 1 of 1", [event["message"] for event in job.events])
+            archive = self.client.get(reverse("archive", args=[job.id]))
+            with ZipFile(io.BytesIO(b"".join(archive.streaming_content))) as zipped:
+                self.assertEqual(zipped.read("01/Game Point.jpg"), new_cover)
+
+
+class OpenAIImageProtocolTests(SimpleTestCase):
+    def test_openai_sends_reference_and_uses_returned_art(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference = root / "reference.jpg"
+            reference.write_bytes(image("green"))
+            config = ImageProvider("openai", "gpt-image-2", "https://api.openai.com/v1", "low", "fixture-key")
+
+            def respond(request):
+                self.assertEqual(str(request.url), "https://api.openai.com/v1/images/edits")
+                self.assertEqual(request.headers["Authorization"], "Bearer fixture-key")
+                self.assertIn(b'name="image[]"; filename="reference.jpg"', request.content)
+                self.assertIn(b"864x1536", request.content)
+                return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(image("blue")).decode()}]})
+
+            request_client = httpx.Client
+            with patch("studio.thumbnail_ai.httpx.Client", return_value=request_client(transport=httpx.MockTransport(respond))):
+                result = make_ai_cover(config, {"title": "Game Point", "description": "The deciding point."},
+                                       "9:16", root, reference=reference)
+            with Image.open(io.BytesIO(result)) as generated:
+                self.assertEqual(generated.size, (1080, 1920))
+                self.assertGreater(generated.getpixel((500, 500))[2], 230)

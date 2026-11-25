@@ -346,7 +346,7 @@ export default function PublishStudio({ initialJob, initialClip }) {
                 <p>{post.message}</p>
                 {["sending", "processing"].includes(post.status) && <progress value={post.progress} max={100} aria-label="Transfer progress" />}
                 <div className="publish-buttons">
-                  <Link className="secondary-button" href={`/jobs/${post.job_id}`}>View clip</Link>
+                  {post.job_id && <Link className="secondary-button" href={`/jobs/${post.job_id}`}>View clip</Link>}
                   {post.url && <a className="secondary-button" href={post.url} target="_blank" rel="noreferrer">Open post <ExternalLink size={14} aria-hidden="true" /></a>}
                   {post.can_apply_thumbnail && <button type="button" className="secondary-button" disabled={Boolean(busy)}
                     onClick={() => perform("thumbnail", async () => {
@@ -356,7 +356,7 @@ export default function PublishStudio({ initialJob, initialClip }) {
                     })}>{post.thumbnail_state === "applied" ? "Update thumbnail" : "Apply thumbnail"}</button>}
                   {post.platform === "tiktok" && post.status === "inbox" && post.caption &&
                     <button className="secondary-button" type="button" onClick={() => copy(post.caption)}>Copy caption</button>}
-                  {([["cancel", "Cancel"], ["retry", "Retry"], ["check", "Check status"]]).map(([action, label]) =>
+                  {post.job_id && ([["cancel", "Cancel"], ["retry", "Retry"], ["check", "Check status"]]).map(([action, label]) =>
                     ((action === "cancel" && post.status === "queued" && !post.started_at) ||
                       (action === "retry" && post.status === "failed") || (action === "check" && post.status === "inbox")) &&
                     <button type="button" className="secondary-button" key={action} disabled={Boolean(busy)}

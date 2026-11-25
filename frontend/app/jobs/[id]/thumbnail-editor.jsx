@@ -120,49 +120,49 @@ export default function ThumbnailEditor({ clip, index, ratio, onSave, onClose })
           <details className="thumbnail-frame-tools">
             <summary>Design from a video frame</summary>
             <form onSubmit={(event) => { event.preventDefault(); run("save"); }}>
-          {choices.length ? (
-            <fieldset className="control-group" disabled={Boolean(busy)}>
-              <legend>Choose a frame</legend>
-              <div className="thumbnail-choices">
-                {choices.map(({ url, time }, choice) => (
-                  <button key={url} type="button" aria-pressed={draft.frame === choice}
-                    onClick={() => change({ frame: choice })} aria-label={`Frame ${choice + 1} at ${timeLabel(time)}`}>
-                    <span><Image src={url} alt="" fill unoptimized sizes="110px" /></span>
-                    <small>{timeLabel(time)}</small>
+              {choices.length ? (
+                <fieldset className="control-group" disabled={Boolean(busy)}>
+                  <legend>Choose a frame</legend>
+                  <div className="thumbnail-choices">
+                    {choices.map(({ url, time }, choice) => (
+                      <button key={url} type="button" aria-pressed={draft.frame === choice}
+                        onClick={() => change({ frame: choice })} aria-label={`Frame ${choice + 1} at ${timeLabel(time)}`}>
+                        <span><Image src={url} alt="" fill unoptimized sizes="110px" /></span>
+                        <small>{timeLabel(time)}</small>
+                      </button>
+                    ))}
+                  </div>
+                  <label htmlFor={headline}>Headline <small>(optional)</small></label>
+                  <div className="input-wrap">
+                    <input id={headline} value={draft.headline} maxLength={52} placeholder="Keep it short and specific"
+                      onChange={(event) => change({ headline: event.target.value })} />
+                  </div>
+                  <div className="options thumbnail-design-options">
+                    <SelectField label="Text color" value={draft.accent} choices={accents}
+                      onChange={(accent) => change({ accent })} />
+                    <SelectField label="Text placement" value={draft.placement} choices={placements}
+                      onChange={(placement) => change({ placement })} />
+                  </div>
+                </fieldset>
+              ) : (
+                <div className="thumbnail-find">
+                  <p className="muted">Find frame choices in this saved video. Its burned-in captions may appear in the stills.</p>
+                  <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => run("frames")}>
+                    <ImageIcon size={16} aria-hidden="true" /> {busy === "frames" ? "Finding frames…" : "Find frames"}
                   </button>
-                ))}
-              </div>
-              <label htmlFor={headline}>Headline <small>(optional)</small></label>
-              <div className="input-wrap">
-                <input id={headline} value={draft.headline} maxLength={52} placeholder="Keep it short and specific"
-                  onChange={(event) => change({ headline: event.target.value })} />
-              </div>
-              <div className="options thumbnail-design-options">
-                <SelectField label="Text color" value={draft.accent} choices={accents}
-                  onChange={(accent) => change({ accent })} />
-                <SelectField label="Text placement" value={draft.placement} choices={placements}
-                  onChange={(placement) => change({ placement })} />
-              </div>
-            </fieldset>
-          ) : (
-            <div className="thumbnail-find">
-              <p className="muted">Find frame choices in this saved video. Its burned-in captions may appear in the stills.</p>
-              <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => run("frames")}>
-                <ImageIcon size={16} aria-hidden="true" /> {busy === "frames" ? "Finding frames…" : "Find frames"}
-              </button>
-            </div>
-          )}
-          {selected && <div className="thumbnail-actions">
-            <a className="secondary-button" href={`${selected.url}?download=1`}>
-              <Download size={16} aria-hidden="true" /> Save frame JPG
-            </a>
-            <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => run("preview")}>
-              {busy === "preview" ? "Rendering…" : "Preview cover"}
-            </button>
-            <button type="submit" className="primary-button" disabled={Boolean(busy)}>
-              <Save size={16} aria-hidden="true" /> {busy === "save" ? "Saving…" : "Use thumbnail"}
-            </button>
-          </div>}
+                </div>
+              )}
+              {selected && <div className="thumbnail-actions">
+                <a className="secondary-button" href={`${selected.url}?download=1`}>
+                  <Download size={16} aria-hidden="true" /> Save frame JPG
+                </a>
+                <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => run("preview")}>
+                  {busy === "preview" ? "Rendering…" : "Preview cover"}
+                </button>
+                <button type="submit" className="primary-button" disabled={Boolean(busy)}>
+                  <Save size={16} aria-hidden="true" /> {busy === "save" ? "Saving…" : "Use thumbnail"}
+                </button>
+              </div>}
             </form>
           </details>
         </div>

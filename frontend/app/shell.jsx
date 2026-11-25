@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { ChevronDown, Clapperboard, History, Plus, Scissors, Send, Settings } from "lucide-react";
+import { ChevronDown, Clapperboard, LibraryBig, Plus, Scissors, Send, Settings } from "lucide-react";
 import { settingsSections, useSettingsSection } from "./settings/sections";
 
 export default function Shell({ children }) {
@@ -11,6 +11,7 @@ export default function Shell({ children }) {
   const onStudio = pathname === "/";
   const onSettings = pathname === "/settings";
   const onRender = pathname.startsWith("/jobs/");
+  const onLibrary = pathname === "/library";
   const onPublish = pathname === "/publish";
   const section = useSettingsSection();
   const [settingsOpen, setSettingsOpen] = useState(null);
@@ -27,8 +28,9 @@ export default function Shell({ children }) {
           <Link href="/" className={onStudio ? "nav-item current" : "nav-item"} aria-current={onStudio ? "page" : undefined}>
             <Plus size={19} aria-hidden="true" /><span>New render</span>
           </Link>
-          <Link href="/#history" className={onRender ? "nav-item current" : "nav-item"}>
-            <History size={18} aria-hidden="true" /><span>Render history</span>
+          <Link href="/library" className={onLibrary || onRender ? "nav-item current" : "nav-item"}
+            aria-current={onLibrary ? "page" : undefined}>
+            <LibraryBig size={18} aria-hidden="true" /><span>Library</span>
           </Link>
           <Link href="/publish" className={onPublish ? "nav-item current" : "nav-item"}
             aria-current={onPublish ? "page" : undefined}>
@@ -60,7 +62,7 @@ export default function Shell({ children }) {
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <span>{onStudio ? "Studio" : onSettings ? "Settings" : onPublish ? "Publish Studio" : "Render details"}</span>
+          <span>{onStudio ? "Studio" : onSettings ? "Settings" : onPublish ? "Publish Studio" : onLibrary ? "Library" : "Render details"}</span>
           <span className="topbar-brand">Cutframe Studio</span>
         </header>
         <main id="main-content" className="content">{children}</main>

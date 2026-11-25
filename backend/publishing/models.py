@@ -53,7 +53,9 @@ class Publication(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     owner = models.UUIDField(db_index=True)
-    job = models.ForeignKey("studio.Job", on_delete=models.PROTECT)
+    ACTIVE = (Status.QUEUED, Status.SENDING, Status.PROCESSING)
+
+    job = models.ForeignKey("studio.Job", on_delete=models.SET_NULL, null=True)
     clip_index = models.PositiveSmallIntegerField()
     platform = models.CharField(max_length=12, choices=Platform)
     account_id = models.CharField(max_length=180)

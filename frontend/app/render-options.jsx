@@ -1,7 +1,8 @@
 "use client";
 
-import { useId } from "react";
-import { ChevronDown, Minus, Plus } from "lucide-react";
+import { useId, useState } from "react";
+import Image from "next/image";
+import { Check, ChevronDown, Minus, Play, Plus, Square } from "lucide-react";
 
 const ratios = [
   ["9:16", "Vertical"],
@@ -15,11 +16,11 @@ const captionStyles = [["classic", "Classic captions"], ["highlight", "Highlight
 const selectionModes = [["count", "By clip count"], ["score", "By viral score"]];
 const gameplaySelection = [["count", "By clip count"], ["score", "By activity score"]];
 export const editingStyles = {
-  balanced: ["Balanced", "Finds standalone moments and follows your framing and caption settings."],
-  fast: ["Fast Cuts", "Looks for a quick hook and payoff, tightens quiet gaps, and uses shorter caption groups."],
-  podcast: ["Podcast", "Keeps question-and-answer context, steadies framing, and levels speech."],
-  gameplay: ["Gameplay", "Finds screen action locally and keeps the game in view. A stable webcam can sit above it."],
-  tutorial: ["Tutorial", "Keeps the full demonstration in frame and looks for a complete step and result."],
+  balanced: ["Balanced", "Natural pacing and smart framing."],
+  fast: ["Fast Cuts", "Tighter pauses and punchy captions."],
+  podcast: ["Podcast", "Steady speakers and clear dialogue."],
+  gameplay: ["Gameplay", "Main screen first, webcam above."],
+  tutorial: ["Tutorial", "Keeps the full demonstration visible."],
 };
 export const studioModes = [["shorts", "Short Clips"], ["highlights", "Highlights"]];
 const highlightMethods = [["transcript", "AI transcript"], ["activity", "Local visual activity"]];
@@ -88,6 +89,47 @@ export function HighlightOptions({ value, onChange, showShared = false }) {
   );
 }
 
+function EditingStylePicker({ value, onChange }) {
+  const group = useId();
+  const [playing, setPlaying] = useState(null);
+  const [previewError, setPreviewError] = useState("");
+  return (
+    <fieldset className="editing-styles" aria-describedby={`${group}-hint`}>
+      <legend>Editing style</legend>
+      <p id={`${group}-hint`}>Applies to all clips in this render. Play any sample to compare.</p>
+      <div className="editing-style-grid">
+        {Object.entries(editingStyles).map(([style, [label, description]]) => {
+          const preview = `/editing-previews/${style}`;
+          const isPlaying = playing === style;
+          return (
+            <div className="editing-style-card" key={style}>
+              <input type="radio" className="sr-only" id={`${group}-${style}`} name={group} checked={value === style}
+                value={style} aria-labelledby={`${group}-${style}-name`} aria-describedby={`${group}-${style}-desc`}
+                onChange={() => { setPlaying(null); onChange(style); }} />
+              <label htmlFor={`${group}-${style}`}>
+                <span className="editing-style-art">
+                  <Image src={`${preview}.webp`} alt="" fill unoptimized sizes="(max-width: 520px) 110px, 150px" />
+                  {isPlaying && <video muted autoPlay playsInline aria-hidden="true" src={`${preview}.webm`}
+                    onEnded={() => setPlaying(null)} onError={() => { setPlaying(null); setPreviewError(`${label} sample unavailable.`); }} />}
+                  <span className="editing-style-check" aria-hidden="true">{value === style && <Check size={13} strokeWidth={3} />}</span>
+                </span>
+                <strong id={`${group}-${style}-name`}>{label}</strong>
+                <small id={`${group}-${style}-desc`}>{description}</small>
+              </label>
+              <button type="button" className="editing-style-play" aria-label={`${isPlaying ? "Stop" : "Play"} ${label} preview`}
+                onClick={() => { setPreviewError(""); setPlaying(isPlaying ? null : style); }}>
+                {isPlaying ? <Square size={11} fill="currentColor" aria-hidden="true" /> :
+                  <Play size={11} fill="currentColor" aria-hidden="true" />}<span>2.5s</span>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {previewError && <p className="field-error" role="status">{previewError}</p>}
+    </fieldset>
+  );
+}
+
 export default function RenderOptions({ value, onChange, compact = false, showQuality = true }) {
   const id = useId();
   const { clip_count: count, aspect_ratio: ratio, quality, language, framing, caption_style } = value;
@@ -102,12 +144,7 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
 
   return (
     <>
-      <div className="clip-edit-style">
-        <SelectField label="Editing style" value={style}
-          choices={Object.entries(editingStyles).map(([key, [label]]) => [key, label])}
-          onChange={(editing_style) => onChange({ editing_style })} />
-        <small className="selection-hint">{editingStyles[style][1]}</small>
-      </div>
+      <EditingStylePicker value={style} onChange={(editing_style) => onChange({ editing_style })} />
       <div className="clip-selection">
         <SelectField label="Clip selection" value={selection_mode} choices={gameplay ? gameplaySelection : selectionModes}
           onChange={(next) => onChange({ selection_mode: next, min_viral_score: min_viral_score ?? 80 })} />

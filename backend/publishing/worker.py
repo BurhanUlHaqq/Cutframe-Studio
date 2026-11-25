@@ -47,7 +47,7 @@ def process_next():
         connection = Connection.objects.filter(owner=post.owner, platform=post.platform).first()
         if not connection or not any(account["id"] == post.account_id for account in connection.accounts):
             raise PublishError("Reconnect the original destination account before retrying.")
-        if post.job.owner != post.owner:
+        if post.job_id is None or post.job.owner != post.owner:
             raise PublishError("The rendered clip is no longer available.")
         state = unseal(post.transfer)
         if post.platform == Platform.YOUTUBE and "thumbnail_file" not in post.options:
