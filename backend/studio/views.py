@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from django.conf import settings
+from django.db import DatabaseError, connection
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404
@@ -95,6 +96,11 @@ def form_data(request, form_class, defaults=None):
 
 @require_GET
 def health(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except DatabaseError:
+        return JsonResponse({"status": "database unavailable"}, status=503)
     return JsonResponse({"status": "ok"})
 
 

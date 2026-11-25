@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { api, submit } from "./api";
 
 const initialPreferences = {
@@ -17,6 +17,7 @@ export function PreferencesProvider({ children }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [request, setRequest] = useState(0);
+  const saveQueue = useRef(Promise.resolve());
 
   useEffect(() => {
     const abort = new AbortController();
@@ -54,7 +55,9 @@ export function PreferencesProvider({ children }) {
   }
 
   async function save(preferences) {
-    setData(await submit("preferences/", preferences));
+    const pending = saveQueue.current.then(() => submit("preferences/", preferences));
+    saveQueue.current = pending.catch(() => {});
+    setData(await pending);
   }
 
   return (

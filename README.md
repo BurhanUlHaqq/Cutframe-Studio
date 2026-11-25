@@ -19,10 +19,15 @@ Turn YouTube links and local video files into short clips. The Next.js studio qu
 | Next.js studio | `http://localhost:5031` |
 | Django API | `http://localhost:5032/api/` |
 | Render worker | Runs on the Docker network |
+| PostgreSQL 17 | `db:5432` on the Docker network |
 
 The web and API ports bind to the local loopback interface. Set `STUDIO_PORT` and `STUDIO_API_PORT` in `.env` to override them. Set `STUDIO_DATA_PATH` to an existing absolute host folder when using another drive or operating system.
 
-The backend and worker share the storage folder. It holds the job database, media, ZIP exports, and Whisper model cache. A render continues while the browser is closed, and the worker picks up interrupted jobs when it restarts. Use the same browser and hostname to access your render history.
+PostgreSQL stores render history, clip metadata, workspace preferences, AI settings, and browser sessions in `D:\volumes\Cutframe\postgres`. Compose creates a database password in `D:\volumes\Cutframe\postgres-config` on first startup. Keep that folder and `django.secret` with the storage so the app can connect to the database and decrypt saved provider credentials.
+
+On the first PostgreSQL startup, Cutframe copies the previous `studio.sqlite3` into the new database. The original SQLite file stays available as a backup. Uploaded media, rendered clips, ZIP exports, and the Whisper cache continue to live in the shared storage folder. Use the same browser and hostname to access your render history.
+
+When running Django directly without Docker Compose, it uses SQLite by default. Set `STUDIO_DB_HOST`, `STUDIO_DB_NAME`, `STUDIO_DB_USER`, and `STUDIO_DB_PASSWORD` to connect to PostgreSQL.
 
 Docker builds use PyPI by default. Set `CUTFRAME_PYPI_INDEX` to a trusted Python package mirror if PyPI downloads are slow.
 
@@ -103,6 +108,13 @@ Run the API and media regression tests with test responses for highlight ranking
 docker compose run --rm --no-deps backend python manage.py test studio
 docker compose logs -f worker
 docker compose down
+```
+
+With the database running, create a PostgreSQL backup and copy it to the host.
+
+```powershell
+docker compose exec -T db pg_dump -U cutframe -d cutframe -Fc -f /tmp/cutframe.dump
+docker compose cp db:/tmp/cutframe.dump .\cutframe.dump
 ```
 
 ## License

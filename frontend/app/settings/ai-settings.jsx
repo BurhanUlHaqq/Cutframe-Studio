@@ -86,10 +86,10 @@ export default function AISettings() {
   ];
 
   return (
-    <section className="panel settings-panel ai-panel" aria-labelledby="ai-settings-title">
+    <section className="panel settings-panel" aria-labelledby="ai-settings-title">
       <div className="panel-heading">
         <span className="heading-icon"><Cpu size={21} aria-hidden="true" /></span>
-        <div><h2 id="ai-settings-title">AI models</h2>
+        <div><h2 id="ai-settings-title" tabIndex={-1}>AI models</h2>
           <p>Choose a provider and model for ranking, plus a local Whisper model for transcription.</p></div>
       </div>
       {!data ? (
@@ -108,9 +108,6 @@ export default function AISettings() {
                   base_url: provider === data.settings.provider ? data.settings.base_url : "",
                   api_key: "", remove_key: false,
                 })} />
-              <SelectField label="Whisper model" value={values.whisper_model}
-                choices={[["", `Server environment (${data.whisper.model})`], ...data.whisper.models.map((model) => [model, model])]}
-                onChange={(whisper_model) => change({ whisper_model })} />
               {values.provider ? (
                 <>
                   {values.provider === "compatible" && <div>
@@ -171,6 +168,11 @@ export default function AISettings() {
                     : "Load models from the selected provider."}</p>
                 </>
               )}
+            </div>
+            <div className="ai-transcription">
+              <SelectField label="Whisper model" value={values.whisper_model}
+                choices={[["", `Server environment (${data.whisper.model})`], ...data.whisper.models.map((model) => [model, model])]}
+                onChange={(whisper_model) => change({ whisper_model })} />
             </div>
           </fieldset>
           <div className="settings-actions">

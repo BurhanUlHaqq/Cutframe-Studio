@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 from unittest import skipUnless
+from unittest.mock import patch
 
 import cv2
 from django.test import SimpleTestCase
@@ -83,6 +84,60 @@ class MediaFeaturesTests(SimpleTestCase):
         self.assertEqual(result.shape, (160, 90, 3))
         self.assertEqual(framer.layout, "fit")
         self.assertGreater(result[80, 45].mean(), result[0, 45].mean())
+
+    def test_smart_framing_detects_stable_webcam_and_keeps_both_screen_edges(self):
+        framer = Framer(cv2, (640, 360), (360, 640), "9:16", "auto", 24)
+        webcam = (46, 242, 52, 64)
+        frame = np.full((360, 640, 3), (55, 70, 60), dtype=np.uint8)
+        frame[:, :64] = (100, 200, 12)
+        frame[:, -64:] = (200, 100, 60)
+        frame[200:350, :164] = (40, 55, 220)
+        screen = cv2.resize(frame, (360, 202), interpolation=cv2.INTER_AREA)
+        with patch("shorts_generator.local.reframe.detect_faces", return_value=[webcam]):
+            opening = framer.frame(frame, 0)
+            np.testing.assert_array_equal(opening[219:421], screen)
+            framer.frame(frame, 4)
+            result = framer.frame(frame, 8)
+        np.testing.assert_array_equal(result[219:421], screen)
+        np.testing.assert_array_equal(result[100, 180], (40, 55, 220))
+        self.assertLess(result[540, 180].max(), 80)
+
+        with patch("shorts_generator.local.reframe.detect_faces", return_value=[]):
+            framer.frame(np.full_like(frame, 240), 9)
+        self.assertIsNone(framer.webcam)
+
+    @skipUnless(ffmpeg_has_ass(), "FFmpeg with the ASS filter required")
+    def test_streamer_layout_keeps_captions_below_the_gameplay_panel(self):
+        with TemporaryDirectory() as temp:
+            directory = Path(temp)
+            video = directory / "source.mp4"
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=blue:s=640x360:r=12",
+                "-vf", "drawbox=x=20:y=195:w=150:h=165:color=red:t=fill", "-t", "2", "-c:v", "libx264", str(video),
+            ], check=True)
+            cues = build_cues([{"start": 0, "end": 1.9, "text": "This caption belongs below the game."}], 0, 2)
+            clean, burned = directory / "clean.mp4", directory / "burned.mp4"
+            with patch("shorts_generator.local.reframe.detect_faces", return_value=[(46, 242, 52, 64)]):
+                crop_clip_local(str(video), 0, 2, "9:16", str(clean), framing="stream")
+                crop_clip_local(str(video), 0, 2, "9:16", str(burned), cues=cues, framing="stream")
+
+            def read_frame(path):
+                capture = cv2.VideoCapture(str(path))
+                try:
+                    capture.set(cv2.CAP_PROP_POS_MSEC, 500)
+                    ok, frame = capture.read()
+                    self.assertTrue(ok)
+                    return frame.astype(np.int16)
+                finally:
+                    capture.release()
+
+            plain, captioned = read_frame(clean), read_frame(burned)
+            self.assertEqual(captioned.shape[:2], (640, 360))
+            self.assertGreater(captioned[100, 180, 2], 200)
+            self.assertGreater(captioned[300, 330, 0], 200)
+            caption_rows = np.nonzero(np.max(np.abs(plain - captioned), axis=2) > 70)[0]
+            self.assertGreater(len(caption_rows), 100)
+            self.assertGreater(caption_rows.min(), 440)
 
     @skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
     def test_thumbnail_looks_beyond_a_dark_opening(self):

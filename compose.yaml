@@ -1,5 +1,11 @@
 name: cutframe-studio
 
+x-database: &database
+  STUDIO_DB_HOST: db
+  STUDIO_DB_NAME: cutframe
+  STUDIO_DB_USER: cutframe
+  STUDIO_DB_PASSWORD_FILE: /data/postgres-config/password
+
 x-django: &django
   image: cutframe-studio-backend
   env_file:
@@ -15,6 +21,43 @@ x-django: &django
   restart: unless-stopped
 
 services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: cutframe
+      POSTGRES_USER: cutframe
+      POSTGRES_PASSWORD_FILE: /credentials/password
+    entrypoint:
+      - sh
+      - -ec
+      - |
+        if [ ! -s "$$POSTGRES_PASSWORD_FILE" ]; then
+          if [ -s "$$PGDATA/PG_VERSION" ]; then
+            echo "Restore the existing database password file before starting PostgreSQL." >&2
+            exit 1
+          fi
+          secret=$$(mktemp "$$POSTGRES_PASSWORD_FILE.XXXXXX")
+          od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]' > "$$secret"
+          chown postgres:postgres "$$secret"
+          mv "$$secret" "$$POSTGRES_PASSWORD_FILE"
+        fi
+        exec docker-entrypoint.sh "$$@"
+      - --
+    command: ["postgres"]
+    volumes:
+      - type: bind
+        source: "${STUDIO_DATA_PATH:-D:/volumes/Cutframe}/postgres"
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: "${STUDIO_DATA_PATH:-D:/volumes/Cutframe}/postgres-config"
+        target: /credentials
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-U", "cutframe", "-d", "cutframe"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 25s
+    restart: unless-stopped
   backend:
     <<: *django
     build:
@@ -22,10 +65,15 @@ services:
       args:
         UV_DEFAULT_INDEX: ${CUTFRAME_PYPI_INDEX:-https://pypi.org/simple}
     environment:
+      <<: *database
       STUDIO_DATA_DIR: /data
       DJANGO_CSRF_TRUSTED_ORIGINS: "${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:${STUDIO_PORT:-5031},http://127.0.0.1:${STUDIO_PORT:-5031}}"
     ports:
       - "127.0.0.1:${STUDIO_API_PORT:-5032}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
     command: >
       sh -c "python manage.py migrate --noinput &&
       exec gunicorn studio.wsgi:application --bind 0.0.0.0:8000
@@ -39,12 +87,14 @@ services:
     <<: *django
     pull_policy: never
     environment:
+      <<: *database
       STUDIO_DATA_DIR: /data
       HF_HOME: /data/huggingface
     command: ["python", "manage.py", "process_jobs"]
     depends_on:
       backend:
         condition: service_healthy
+        restart: true
   frontend:
     build:
       context: frontend

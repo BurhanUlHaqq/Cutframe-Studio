@@ -18,6 +18,7 @@ from shorts_generator.local.clipper import crop_clip_local
 from shorts_generator.local.llm import RankingConfig
 from shorts_generator.pipeline import generate_shorts
 
+from .exports import publication_filename
 from .models import Job, WorkspacePreferences
 from .worker import process_next_job
 
@@ -128,13 +129,13 @@ class StudioTests(TestCase):
             self.assertEqual(response.status_code, 200)
             with ZipFile(io.BytesIO(b"".join(response.streaming_content))) as archive:
                 self.assertIsNone(archive.testzip())
-                stem = "01-café-a-story"
-                self.assertEqual(set(archive.namelist()), {f"{stem}/{stem}.{ext}" for ext in ("mp4", "jpg", "txt", "srt")})
-                thumbnail_bytes = archive.read(f"{stem}/{stem}.jpg")
+                stem = "01/Café A story"
+                self.assertEqual(set(archive.namelist()), {f"{stem}.{ext}" for ext in ("mp4", "jpg", "txt", "srt")})
+                thumbnail_bytes = archive.read(f"{stem}.jpg")
                 self.assertTrue(thumbnail_bytes.startswith(b"\xff\xd8"))
-                self.assertEqual(archive.read(f"{stem}/{stem}.txt").decode(), "Café / A story\n\nA clip about coffee.\n")
+                self.assertEqual(archive.read(f"{stem}.txt").decode(), "Café / A story\n\nA clip about coffee.\n")
                 video_path = Path(temp) / "clip.mp4"
-                video_path.write_bytes(archive.read(f"{stem}/{stem}.mp4"))
+                video_path.write_bytes(archive.read(f"{stem}.mp4"))
             probe = json.loads(subprocess.check_output([
                 "ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(video_path),
             ]))
@@ -143,6 +144,7 @@ class StudioTests(TestCase):
             self.assertEqual(video["width"] * 16, video["height"] * 9)
             self.assertEqual(audio["codec_name"], "aac")
             self.assertAlmostEqual(float(probe["format"]["duration"]), 2.0, delta=0.1)
+            self.assertEqual(probe["format"]["tags"]["title"], "Café / A story")
 
             video_url = job["clips"][0]["video_url"]
             partial = self.client.get(video_url, HTTP_RANGE="bytes=0-15")
@@ -166,17 +168,33 @@ class StudioTests(TestCase):
             thumbnail_url = job["clips"][0]["thumbnail_url"]
             self.assertEqual(Client().get(thumbnail_url, {"download": 1}).status_code, 404)
             jpg = self.client.get(thumbnail_url, {"download": 1})
-            self.assertEqual(jpg["Content-Disposition"], 'attachment; filename="01-a-better-title.jpg"')
+            self.assertEqual(jpg["Content-Disposition"], 'attachment; filename="A better title.jpg"')
             self.assertEqual(b"".join(jpg.streaming_content), thumbnail_bytes)
+            self.assertEqual(Client().get(video_url, {"download": 1}).status_code, 404)
+            mp4 = self.client.get(video_url, {"download": 1})
+            self.assertEqual(mp4["Content-Disposition"], 'attachment; filename="A better title.mp4"')
+            downloaded_video = b"".join(mp4.streaming_content)
+            renamed = video_path.with_name("renamed.mp4")
+            renamed.write_bytes(downloaded_video)
+            tags = json.loads(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries", "format_tags=title", "-of", "json", str(renamed),
+            ]))
+            self.assertEqual(tags["format"]["tags"]["title"], metadata["title"])
+            def stream_hash(path):
+                return subprocess.check_output([
+                    "ffmpeg", "-v", "error", "-i", str(path), "-map", "0", "-c", "copy", "-f", "streamhash", "-",
+                ])
+
+            self.assertEqual(stream_hash(video_path), stream_hash(renamed))
 
             response = self.client.get(job["archive_url"])
             with ZipFile(io.BytesIO(b"".join(response.streaming_content))) as archive:
-                stem = "01-a-better-title"
+                stem = "01/A better title"
                 self.assertIsNone(archive.testzip())
-                self.assertEqual(archive.read(f"{stem}/{stem}.mp4"), video_path.read_bytes())
-                self.assertEqual(archive.read(f"{stem}/{stem}.jpg"), thumbnail_bytes)
-                self.assertEqual(archive.read(f"{stem}/{stem}.txt").decode(), "A better title\n\nThe corrected description.\n")
-                self.assertEqual(archive.read(f"{stem}/{stem}.srt"), caption_text)
+                self.assertEqual(archive.read(f"{stem}.mp4"), downloaded_video)
+                self.assertEqual(archive.read(f"{stem}.jpg"), thumbnail_bytes)
+                self.assertEqual(archive.read(f"{stem}.txt").decode(), "A better title\n\nThe corrected description.\n")
+                self.assertEqual(archive.read(f"{stem}.srt"), caption_text)
             text = self.client.get(job["clips"][0]["text_url"])
             self.assertEqual(b"".join(text.streaming_content).decode(), "A better title\n\nThe corrected description.\n")
 
@@ -258,6 +276,13 @@ class WorkspacePreferencesTests(TestCase):
 
 
 class HighlightTests(SimpleTestCase):
+    def test_publication_filename_keeps_title_case_and_handles_filesystem_limits(self):
+        self.assertEqual(publication_filename("How I Beat Level 5!"), "How I Beat Level 5!")
+        self.assertEqual(publication_filename("Café / A story?"), "Café A story")
+        self.assertEqual(publication_filename("CON.txt"), "_CON.txt")
+        self.assertEqual(publication_filename('...'), "Clip")
+        self.assertLessEqual(len(publication_filename("🦊" * 100).encode("utf-8")), 180)
+
     def test_score_selection_includes_the_cutoff_and_has_no_count_cap(self):
         transcript = {"duration": 36, "segments": [
             {"start": 0, "end": 6, "text": "The first story."},

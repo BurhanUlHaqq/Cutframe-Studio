@@ -46,13 +46,28 @@ MIDDLEWARE = [
     "studio.uploads.UploadLimitMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
 ]
-DATABASES = {
-    "default": {
+def studio_database():
+    host = os.getenv("STUDIO_DB_HOST")
+    if host:
+        password_file = os.getenv("STUDIO_DB_PASSWORD_FILE")
+        return {
+            "ENGINE": "django.db.backends.postgresql",
+            "HOST": host,
+            "PORT": os.getenv("STUDIO_DB_PORT", "5432"),
+            "NAME": os.getenv("STUDIO_DB_NAME", "cutframe"),
+            "USER": os.getenv("STUDIO_DB_USER", "cutframe"),
+            "PASSWORD": (Path(password_file).read_text(encoding="utf-8").strip() if password_file
+                         else os.getenv("STUDIO_DB_PASSWORD", "")),
+            "OPTIONS": {"connect_timeout": 5},
+        }
+    return {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": STUDIO_DATA_DIR / "studio.sqlite3",
         "OPTIONS": {"timeout": 20},
-    },
-}
+    }
+
+
+DATABASES = {"default": studio_database()}
 DATA_UPLOAD_MAX_MEMORY_SIZE = 16 * 1024
 DATA_UPLOAD_MAX_NUMBER_FILES = 1
 STUDIO_MAX_UPLOAD_BYTES = int(os.getenv("STUDIO_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
