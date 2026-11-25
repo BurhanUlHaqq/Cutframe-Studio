@@ -9,10 +9,11 @@ from shorts_generator import generate_shorts
 from shorts_generator.local.llm import RankingConfigurationError
 from shorts_generator.local.media import InvalidSourceVideo
 from shorts_generator.pipeline import NoMatchingHighlights
+from shorts_generator.reel import generate_highlight_reel
 
-from .ai_settings import resolve_ai_options, saved_ai_options
+from .ai_settings import installation_ai, resolve_ai_options, saved_ai_options, transcription_options
 from .exports import job_directory, make_export
-from .models import ClipSelection, Job
+from .models import ClipSelection, HighlightMethod, Job, StudioMode
 from .uploads import uploaded_source
 
 logger = logging.getLogger(__name__)
@@ -82,23 +83,41 @@ def process_next_job():
         work = job_directory(job.id) / "work"
         work.mkdir(parents=True, exist_ok=True)
         options = saved_ai_options(job.owner)
+        installation = installation_ai()
+        transcription = transcription_options(options, installation)
         min_viral_score = job.min_viral_score if job.selection_mode == ClipSelection.SCORE else None
-        shorts = generate_shorts(
-            job.source_url, num_clips=job.clip_count, aspect_ratio=job.aspect_ratio,
-            min_viral_score=min_viral_score,
-            clip_length=(job.min_clip_seconds, job.max_clip_seconds),
-            download_format=job.quality, language=job.language or None,
-            framing=job.framing, caption_style=job.caption_style,
-            uploaded_video=uploaded_source(job.id) if job.source_name else None,
-            ranking=resolve_ai_options(options), whisper_model=options.get("whisper_model"),
-            out_dir=str(work), on_progress=report,
-        )
+        source_options = {
+            "uploaded_video": uploaded_source(job.id) if job.source_name else None,
+            "language": job.language or None, "caption_style": job.caption_style,
+            "whisper_model": transcription.pop("whisper_model"), "transcription": transcription,
+            "out_dir": str(work), "on_progress": report,
+        }
+        reel = job.studio_mode == StudioMode.HIGHLIGHTS
+        if reel:
+            ranking = None
+            if job.highlight_method == HighlightMethod.TRANSCRIPT:
+                try:
+                    ranking = resolve_ai_options(options, installation)
+                except RankingConfigurationError:
+                    pass
+            shorts = generate_highlight_reel(
+                job.source_url, minutes=job.highlight_minutes, method=job.highlight_method,
+                quality=job.quality, source_name=job.source_name, ranking=ranking, **source_options,
+            )
+        else:
+            shorts = generate_shorts(
+                job.source_url, num_clips=job.clip_count, aspect_ratio=job.aspect_ratio,
+                min_viral_score=min_viral_score, clip_length=(job.min_clip_seconds, job.max_clip_seconds),
+                download_format=job.quality, framing=job.framing, ranking=resolve_ai_options(options, installation),
+                **source_options,
+            )
         successful = sum(bool(clip.get("clip_url")) for clip in shorts)
         for index, clip in enumerate(shorts, 1):
             if not clip.get("clip_url"):
                 report("render", 89, f"Clip {index} could not be rendered", level="warning")
         if successful:
-            report("export", 92, f"Packaging the ZIP with {successful} clip{'s' if successful != 1 else ''}")
+            export_message = "Packaging the highlight reel" if reel else f"Packaging the ZIP with {successful} clip{'s' if successful != 1 else ''}"
+            report("export", 92, export_message)
             clips = make_export(job, shorts)
             message = "ZIP ready to download"
         elif shorts or min_viral_score is None:

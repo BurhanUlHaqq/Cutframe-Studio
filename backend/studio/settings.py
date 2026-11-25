@@ -2,12 +2,10 @@ import os
 from pathlib import Path
 
 from django.core.management.utils import get_random_secret_key
-from dotenv import load_dotenv
 from filelock import FileLock
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BASE_DIR.parent
-load_dotenv(PROJECT_DIR / ".env")
 
 STUDIO_DATA_DIR = Path(os.getenv("STUDIO_DATA_DIR") or PROJECT_DIR / ".studio").resolve()
 STUDIO_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -38,7 +36,7 @@ SESSION_COOKIE_SECURE = CSRF_COOKIE_SECURE = os.getenv("DJANGO_SECURE_COOKIES", 
 ROOT_URLCONF = "studio.urls"
 WSGI_APPLICATION = "studio.wsgi.application"
 
-INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.sessions", "studio"]
+INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.sessions", "studio", "publishing"]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -70,7 +68,7 @@ def studio_database():
 DATABASES = {"default": studio_database()}
 DATA_UPLOAD_MAX_MEMORY_SIZE = 16 * 1024
 DATA_UPLOAD_MAX_NUMBER_FILES = 1
-STUDIO_MAX_UPLOAD_BYTES = int(os.getenv("STUDIO_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+STUDIO_MAX_UPLOAD_BYTES = 2 * 1024**3
 FILE_UPLOAD_TEMP_DIR = STUDIO_DATA_DIR / "upload-tmp"
 FILE_UPLOAD_TEMP_DIR.mkdir(exist_ok=True)
 TIME_ZONE = "UTC"

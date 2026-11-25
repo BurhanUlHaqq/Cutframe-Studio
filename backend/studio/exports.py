@@ -27,7 +27,10 @@ def publication_filename(title):
 
 
 def clip_text(clip):
-    return f"{clip['title']}\n\n{clip['description']}\n".encode("utf-8")
+    sections = [clip["title"], clip["description"]]
+    if clip.get("chapter_text"):
+        sections.append(clip["chapter_text"])
+    return ("\n\n".join(sections) + "\n").encode("utf-8")
 
 
 def _write_titled_video(source, destination, title):
@@ -139,6 +142,8 @@ def make_export(job, shorts):
             "start_time": short["start_time"],
             "end_time": short["end_time"],
         }
+        if "chapters" in short:
+            metadata.update(chapters=short["chapters"], chapter_text=short["chapter_text"])
         if short.get("caption_path"):
             subtitles = Path(short["caption_path"]).resolve()
             if not subtitles.is_relative_to(work):

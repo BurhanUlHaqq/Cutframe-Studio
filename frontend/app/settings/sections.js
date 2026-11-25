@@ -1,11 +1,13 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { Cpu, Monitor, SlidersHorizontal } from "lucide-react";
+import { Cpu, HardDrive, Link2, Monitor, SlidersHorizontal } from "lucide-react";
 
 export const settingsSections = {
   render: { id: "render-defaults-title", label: "Render defaults", Icon: SlidersHorizontal },
   models: { id: "ai-settings-title", label: "AI models", Icon: Cpu },
+  publishing: { id: "publishing-settings-title", label: "Publishing", Icon: Link2 },
+  storage: { id: "storage-settings-title", label: "Storage", Icon: HardDrive },
   appearance: { id: "appearance-title", label: "Appearance", Icon: Monitor },
 };
 

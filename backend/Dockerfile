@@ -27,6 +27,7 @@ COPY --from=media /ffmpeg /ffprobe /usr/local/bin/
 COPY manage.py ./
 COPY shorts_generator ./shorts_generator
 COPY studio ./studio
+COPY publishing ./publishing
 
 USER studio
 EXPOSE 8000

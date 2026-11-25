@@ -1,6 +1,5 @@
 """Configuration and clients for transcript ranking."""
 
-import os
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -8,9 +7,9 @@ from urllib.parse import urlsplit
 
 
 PROVIDERS = {
-    "openai": ("OpenAI", "OPENAI_MODEL", "gpt-4o-mini", "OPENAI_API_KEY"),
-    "gemini": ("Google Gemini", "GEMINI_MODEL", "gemini-2.5-flash", "GEMINI_API_KEY"),
-    "compatible": ("OpenAI-compatible", "LLM_MODEL", "", "LLM_API_KEY"),
+    "openai": ("OpenAI", "gpt-4o-mini"),
+    "gemini": ("Google Gemini", "gemini-2.5-flash"),
+    "compatible": ("OpenAI-compatible", ""),
 }
 OPENAI_URL = "https://api.openai.com/v1"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
@@ -34,13 +33,7 @@ def clean_key(value):
     return "" if PLACEHOLDER.fullmatch(value) else value
 
 
-def environment_provider():
-    return os.getenv("LLM_PROVIDER", "").strip().lower() or (
-        "compatible" if os.getenv("LLM_BASE_URL", "").strip() else "openai"
-    )
-
-
-def normalize_endpoint(value, *, browser=False):
+def normalize_endpoint(value, *, browser=False, trusted_url=""):
     value = value.strip().rstrip("/")
     try:
         parsed = urlsplit(value)
@@ -51,8 +44,8 @@ def normalize_endpoint(value, *, browser=False):
             or parsed.username is not None or re.search(r"[\s\\?#]", value)):
         raise RankingConfigurationError("Enter an HTTP or HTTPS API base URL without credentials, query, or fragment.")
     if browser and parsed.scheme == "http" and parsed.hostname not in LOCAL_HOSTS:
-        if value != os.getenv("LLM_BASE_URL", "").strip().rstrip("/"):
-            raise RankingConfigurationError("Use HTTPS for a remote API, or set its HTTP URL in LLM_BASE_URL on the server.")
+        if value != trusted_url:
+            raise RankingConfigurationError("Use HTTPS for a remote API and HTTP for a local model server.")
     return value
 
 
@@ -65,28 +58,21 @@ class RankingConfig:
 
     def validate(self, *, require_model=True):
         if require_model and not self.model:
-            raise RankingConfigurationError("Enter the ranking model ID in Settings or the environment.")
+            raise RankingConfigurationError("Enter the ranking model ID in Settings → AI models.")
         if self.provider == "compatible":
             normalize_endpoint(self.base_url)
         elif not self.api_key:
-            label, _, _, key_env = PROVIDERS[self.provider]
-            raise RankingConfigurationError(f"Add a {label} API key in Settings or set {key_env} on the server.")
+            label, _ = PROVIDERS[self.provider]
+            raise RankingConfigurationError(f"Add a {label} API key in Settings → AI models.")
 
 
 def ranking_config(provider="", model="", base_url="", api_key=""):
-    provider = provider or environment_provider()
+    provider = provider or "openai"
     if provider not in PROVIDERS:
-        raise RankingConfigurationError("Set LLM_PROVIDER to openai, gemini, or compatible.")
-    _, model_env, default, key_env = PROVIDERS[provider]
-    configured_base = os.getenv("LLM_BASE_URL", "").strip().rstrip("/")
-    if provider == "compatible":
-        base_url = (base_url or configured_base).rstrip("/")
-        env_key = os.getenv(key_env, "") if base_url and base_url == configured_base else ""
-    else:
-        base_url = OPENAI_URL if provider == "openai" else ""
-        env_key = os.getenv(key_env, "")
-    return RankingConfig(provider, model or os.getenv(model_env, "").strip() or default,
-                         base_url, clean_key(api_key or env_key))
+        raise RankingConfigurationError("Choose OpenAI, Google Gemini, or an OpenAI-compatible provider.")
+    _, default_model = PROVIDERS[provider]
+    base_url = base_url.strip().rstrip("/") if provider == "compatible" else OPENAI_URL if provider == "openai" else ""
+    return RankingConfig(provider, model.strip() or default_model, base_url, clean_key(api_key))
 
 
 @contextmanager

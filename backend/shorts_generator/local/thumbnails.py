@@ -40,7 +40,7 @@ def _score(frame, detector):
     return score
 
 
-def write_thumbnail(video_path: str | Path, destination: Path) -> None:
+def write_thumbnail(video_path: str | Path, destination: Path, *, window=None) -> None:
     """Sample throughout the clip and write the best frame at up to 1920px."""
     video = cv2.VideoCapture(str(video_path))
     try:
@@ -53,8 +53,13 @@ def write_thumbnail(video_path: str | Path, destination: Path) -> None:
             detector = create_face_detector(cv2, (width, height))
         except cv2.error:
             detector = None
-        last = count - 1
-        positions = sorted({round(last * fraction) for fraction in (0.06, 0.14, 0.23, 0.35, 0.50, 0.65, 0.80, 0.93)})
+        start, last = 0, count - 1
+        fps = video.get(cv2.CAP_PROP_FPS)
+        if window and math.isfinite(fps) and fps > 0:
+            start = min(last, round(window[0] * fps))
+            last = min(last, max(start, math.ceil(window[1] * fps) - 1))
+        positions = sorted({round(start + (last - start) * fraction)
+                            for fraction in (0.06, 0.14, 0.23, 0.35, 0.50, 0.65, 0.80, 0.93)})
         best_frame, best_score = first, -math.inf
         for i in positions:
             if i == 0:

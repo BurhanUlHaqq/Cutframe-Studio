@@ -7,9 +7,16 @@ from django.core.files.move import file_move_safe
 from django.http import JsonResponse
 
 from .exports import job_directory
+from .models import InstallationSettings
 
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mpg", ".mpeg", ".ts", ".mts", ".m2ts")
+MIB = 1024 ** 2
+
+
+def upload_limit():
+    return (InstallationSettings.objects.filter(pk=1).values_list("max_upload_bytes", flat=True).first()
+            or settings.STUDIO_MAX_UPLOAD_BYTES)
 
 
 class UploadLimitMiddleware:
@@ -18,11 +25,12 @@ class UploadLimitMiddleware:
 
     def __call__(self, request):
         if request.method == "POST" and request.path_info == "/api/jobs/upload/":
+            request.studio_upload_limit = upload_limit()
             value = request.META.get("CONTENT_LENGTH", "")
             if not value or not value.isascii() or not value.isdecimal() or len(value) > 20:
                 return JsonResponse({"error": "Send the upload with a known file size."}, status=411)
-            if int(value) > settings.STUDIO_MAX_UPLOAD_BYTES + 64 * 1024:
-                return JsonResponse({"error": "This video exceeds the workspace upload limit."}, status=413)
+            if int(value) > request.studio_upload_limit + 64 * 1024:
+                return JsonResponse({"error": "This video exceeds the installation upload limit."}, status=413)
         return self.get_response(request)
 
 

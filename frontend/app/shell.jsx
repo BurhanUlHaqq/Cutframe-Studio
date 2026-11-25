@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { ChevronDown, Clapperboard, History, Plus, Scissors, Settings } from "lucide-react";
+import { ChevronDown, Clapperboard, History, Plus, Scissors, Send, Settings } from "lucide-react";
 import { settingsSections, useSettingsSection } from "./settings/sections";
 
 export default function Shell({ children }) {
@@ -11,6 +11,7 @@ export default function Shell({ children }) {
   const onStudio = pathname === "/";
   const onSettings = pathname === "/settings";
   const onRender = pathname.startsWith("/jobs/");
+  const onPublish = pathname === "/publish";
   const section = useSettingsSection();
   const [settingsOpen, setSettingsOpen] = useState(null);
   const showSettings = settingsOpen ?? onSettings;
@@ -28,6 +29,10 @@ export default function Shell({ children }) {
           </Link>
           <Link href="/#history" className={onRender ? "nav-item current" : "nav-item"}>
             <History size={18} aria-hidden="true" /><span>Render history</span>
+          </Link>
+          <Link href="/publish" className={onPublish ? "nav-item current" : "nav-item"}
+            aria-current={onPublish ? "page" : undefined}>
+            <Send size={18} aria-hidden="true" /><span>Publish</span>
           </Link>
           <div className={onSettings ? "nav-settings current" : "nav-settings"}>
             <SettingsLink href={onSettings ? `#${settingsSections.render.id}` : "/settings"}
@@ -55,7 +60,7 @@ export default function Shell({ children }) {
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <span>{onStudio ? "Studio" : onSettings ? "Settings" : "Render details"}</span>
+          <span>{onStudio ? "Studio" : onSettings ? "Settings" : onPublish ? "Publish Studio" : "Render details"}</span>
           <span className="topbar-brand">Cutframe Studio</span>
         </header>
         <main id="main-content" className="content">{children}</main>

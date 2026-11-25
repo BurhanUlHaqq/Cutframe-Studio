@@ -4,7 +4,7 @@ import Shell from "./shell";
 
 export const metadata = {
   title: { default: "Cutframe Studio", template: "%s · Cutframe Studio" },
-  description: "Turn YouTube videos into short clips with thumbnails and descriptions.",
+  description: "Turn YouTube videos or uploads into short clips and landscape highlight reels.",
 };
 
 export default function RootLayout({ children }) {

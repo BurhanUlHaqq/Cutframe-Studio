@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import {
   AlertCircle, Archive, Captions, Check, Clapperboard, Copy, Download, FileText,
-  Film, Image as ImageIcon, List, LoaderCircle, Pencil, Play, Plus, RotateCcw,
+  Film, Image as ImageIcon, List, LoaderCircle, Pencil, Play, Plus, RotateCcw, Send,
 } from "lucide-react";
 import { api, stages, statusLabels, submit } from "../../api";
 import { usePreferences } from "../../preferences";
@@ -15,7 +15,9 @@ const eventTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: 
 
 function formatTime(seconds) {
   const whole = Math.floor(seconds);
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor(whole / 60) % 60;
+  return `${hours ? `${hours}:${String(minutes).padStart(2, "0")}` : minutes}:${String(whole % 60).padStart(2, "0")}`;
 }
 
 function RenderActivity({ events = [], active }) {
@@ -37,21 +39,32 @@ function RenderActivity({ events = [], active }) {
   );
 }
 
-function ClipCard({ clip, ratio, onSave, showScores }) {
+function ClipCard({ clip, ratio, onSave, showScores, publishUrl, reel }) {
   const [playing, setPlaying] = useState(false);
   const [copyState, setCopyState] = useState("");
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState("");
   const editId = useId();
+  const video = useRef(null);
+  const seek = useRef(0);
   const formattedRatio = ratio.replace(":", " / ");
   async function copy(titleOnly = false) {
     try {
-      await navigator.clipboard.writeText(titleOnly ? clip.title : `${clip.title}\n\n${clip.description}`);
+      await navigator.clipboard.writeText(titleOnly ? clip.title : [clip.title, clip.description, clip.chapter_text].filter(Boolean).join("\n\n"));
       setCopyState(titleOnly ? "Title copied" : "Copied");
     } catch {
       setCopyState("Use the TXT download to copy the title and description.");
     }
+  }
+
+  function playChapter(time) {
+    seek.current = time;
+    if (video.current?.readyState) {
+      video.current.currentTime = time;
+      video.current.play().catch(() => {});
+    }
+    setPlaying(true);
   }
 
   async function save(event) {
@@ -74,19 +87,21 @@ function ClipCard({ clip, ratio, onSave, showScores }) {
     <article className="panel clip-card">
       <div className="clip-player" style={{ "--clip-ratio": formattedRatio }}>
         {playing ? (
-          <video controls autoPlay playsInline preload="metadata" src={clip.video_url}
+          <video ref={video} controls autoPlay playsInline preload="metadata" src={clip.video_url}
+            onLoadedMetadata={(event) => { if (seek.current) event.currentTarget.currentTime = seek.current; }}
             poster={clip.thumbnail_url} aria-label={clip.title} />
         ) : (
           <button type="button" className="clip-poster" onClick={() => setPlaying(true)} aria-label={`Play ${clip.title}`}>
-            <Image src={clip.thumbnail_url} alt="" fill unoptimized sizes="(max-width: 600px) 90vw, 370px" />
+            <Image src={clip.thumbnail_url} alt="" fill unoptimized sizes={reel ? "(max-width: 790px) 90vw, 720px" : "(max-width: 600px) 90vw, 370px"} />
             <span className="play-icon"><Play size={20} fill="currentColor" aria-hidden="true" /></span>
           </button>
         )}
       </div>
       <div className="clip-copy">
         <div className="clip-meta">
-          <span>{formatTime(clip.start_time)}–{formatTime(clip.end_time)} · {Number((clip.end_time - clip.start_time).toFixed(1))}s</span>
-          {showScores && <span className="clip-score">Score {clip.score}</span>}
+          <span>{reel ? `${formatTime(clip.end_time)} runtime · ${clip.chapters?.length ?? 0} selected moments` :
+            `${formatTime(clip.start_time)}–${formatTime(clip.end_time)} · ${Number((clip.end_time - clip.start_time).toFixed(1))}s`}</span>
+          {showScores && typeof clip.score === "number" && <span className="clip-score">Score {clip.score}</span>}
         </div>
         {draft ? (
           <form className="clip-editor" onSubmit={save}>
@@ -106,6 +121,15 @@ function ClipCard({ clip, ratio, onSave, showScores }) {
           <>
             <h3>{clip.title}</h3>
             <p>{clip.description}</p>
+            {reel && clip.chapters?.length > 0 && <details className="advanced reel-chapters">
+              <summary>Chapters</summary>
+              <ol>{clip.chapters.map((chapter) => (
+                <li key={chapter.time}><button className="chapter-link" type="button" onClick={() => playChapter(chapter.time)}>
+                  <span>{formatTime(chapter.time)}</span><strong>{chapter.title}</strong>
+                  <small>Source {formatTime(chapter.source_time)}</small>
+                </button></li>
+              ))}</ol>
+            </details>}
             <div className="clip-actions">
               <button className="secondary-button" type="button" onClick={() => {
                 setDraft({ title: clip.title, description: clip.description });
@@ -122,6 +146,9 @@ function ClipCard({ clip, ratio, onSave, showScores }) {
               <a className="secondary-button" href={`${clip.video_url}?download=1`} aria-label={`Download MP4 for ${clip.title}`}>
                 <Download size={16} aria-hidden="true" /> MP4
               </a>
+              <Link className="secondary-button" href={publishUrl} aria-label={`Publish ${clip.title}`}>
+                <Send size={16} aria-hidden="true" /> Publish
+              </Link>
               <a className="secondary-button" href={clip.text_url}><FileText size={16} aria-hidden="true" /> TXT</a>
               <a className="secondary-button" href={`${clip.thumbnail_url}?download=1`} aria-label={`Download thumbnail for ${clip.title}`}>
                 <ImageIcon size={16} aria-hidden="true" /> JPG
@@ -189,14 +216,19 @@ export default function RenderDetails({ id }) {
 
   const complete = job.status === "complete";
   const failed = job.status === "failed";
+  const reel = job.studio_mode === "highlights";
   const byScore = job.selection_mode === "score";
   const count = complete ? job.clips.length : job.clip_count;
   const noMatches = complete && count === 0;
   const countLabel = `${count} ${count === 1 ? "clip" : "clips"}`;
-  const selection = byScore ? `Viral score ${job.min_viral_score}+` : `Up to ${countLabel}`;
+  const selection = reel ? `Highlights · up to ${job.highlight_minutes} min` :
+    byScore ? `Viral score ${job.min_viral_score}+` : `Up to ${countLabel}`;
   const activeStage = stages.findIndex(([key]) => key === job.stage);
-  const renderStages = job.source_type === "upload"
+  const sourceStages = job.source_type === "upload"
     ? [["download", "Read uploaded video"], ...stages.slice(1)] : stages;
+  const renderStages = reel ? sourceStages.map(([key, label]) => [key, {
+    rank: "Select moments", render: "Assemble reel",
+  }[key] || label]) : sourceStages;
   const activeLabel = renderStages[activeStage]?.[1];
   return (
     <>
@@ -205,8 +237,10 @@ export default function RenderDetails({ id }) {
           <div className="render-title">
             <span className="heading-icon">{complete ? <Archive size={23} aria-hidden="true" /> : <Clapperboard size={23} aria-hidden="true" />}</span>
             <div>
-              <h1>{noMatches ? "No clips met your score" : complete ? "Your clips are ready" : failed ? "Render failed" : "Creating your clips"}</h1>
-              <p>{complete ? countLabel : selection} · {job.aspect_ratio} · {job.source_name || `${job.quality}p`}</p>
+              <h1>{failed ? "Render failed" : noMatches ? "No clips met your score" :
+                complete ? reel ? "Your highlight reel is ready" : "Your clips are ready" :
+                reel ? "Creating your highlight reel" : "Creating your clips"}</h1>
+              <p>{complete ? reel ? `${formatTime(job.clips[0]?.end_time || 0)} runtime` : countLabel : selection} · {job.aspect_ratio} · {job.source_name || `${job.quality}p`}</p>
             </div>
           </div>
           {noMatches ? <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link> :
@@ -250,11 +284,12 @@ export default function RenderDetails({ id }) {
       {complete && !noMatches && (
         <section className="render-results" aria-labelledby="clip-list-title">
           <div className="section-heading">
-            <h2 id="clip-list-title"><Film size={20} aria-hidden="true" /> Review clips</h2>
+            <h2 id="clip-list-title"><Film size={20} aria-hidden="true" /> {reel ? "Review highlight reel" : "Review clips"}</h2>
             <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link>
           </div>
-          <div className="clip-grid">
-            {job.clips.map((clip) => <ClipCard key={clip.video_url} clip={clip} ratio={job.aspect_ratio}
+          <div className={reel ? "reel-result" : "clip-grid"}>
+            {job.clips.map((clip, index) => <ClipCard key={clip.video_url} reel={reel} clip={clip} ratio={job.aspect_ratio}
+              publishUrl={`/publish?job=${job.id}&clip=${index}`}
               onSave={setJob} showScores={!preferencesLoading && preferences.show_scores} />)}
           </div>
         </section>

@@ -20,6 +20,43 @@ def _clock(seconds):
     return f"{minutes}:{remainder:02d}"
 
 
+def progress_reporter(on_progress):
+    def report(stage, percent, message, event=True):
+        if on_progress is not None:
+            on_progress(stage, percent, message, event=event)
+    return report
+
+
+def prepare_source(youtube_url, uploaded_video, download_format, out_dir, report):
+    if uploaded_video is not None:
+        report("download", 5, "Checking the uploaded video and audio tracks")
+        return str(uploaded_video)
+
+    report("download", 5, "Fetching source information from YouTube")
+
+    def download_progress(received, total):
+        amount = f"{received / 1024**2:.1f} MB"
+        if total:
+            amount += f" of {total / 1024**2:.1f} MB"
+        report("download", 5 + min(20, 20 * received // total) if total else 5,
+               f"Receiving a source stream · {amount}", event=False)
+
+    return download_youtube_local(youtube_url, fmt=download_format, out_dir=out_dir, on_bytes=download_progress)
+
+
+def transcribe_source(source_path, language, out_dir, caption_style, whisper_model, report, *, transcription=None):
+    report("transcribe", 28, "Preparing audio and the local Whisper model")
+    return transcribe_local(
+        source_path, language=language, out_dir=out_dir,
+        allow_legacy=caption_style == "off" and not whisper_model, whisper_model=whisper_model,
+        **(transcription or {}),
+        on_progress=lambda done, total: report(
+            "transcribe", 29 + int(24 * done / total),
+            f"Transcribing speech · {_clock(done)} of {_clock(total)}", event=False,
+        ),
+    )
+
+
 def generate_shorts(
     youtube_url: str,
     *,
@@ -27,6 +64,7 @@ def generate_shorts(
     uploaded_video: Optional[Path] = None,
     ranking: Optional[RankingConfig] = None,
     whisper_model: Optional[str] = None,
+    transcription: Optional[Dict] = None,
     num_clips: int = 3,
     min_viral_score: Optional[int] = None,
     clip_length: tuple[int | None, int | None] = (None, None),
@@ -43,37 +81,14 @@ def generate_shorts(
     if which("ffmpeg") is None:
         raise RuntimeError("FFmpeg is required to render shorts. Install it and add it to your PATH.")
 
-    def report(stage: str, percent: int, message: str, event: bool = True) -> None:
-        if on_progress is not None:
-            on_progress(stage, percent, message, event=event)
-
-    if uploaded_video is None:
-        report("download", 5, "Fetching source information from YouTube")
-
-        def download_progress(received, total):
-            amount = f"{received / 1024**2:.1f} MB"
-            if total:
-                amount += f" of {total / 1024**2:.1f} MB"
-            report("download", 5 + min(20, 20 * received // total) if total else 5,
-                   f"Receiving a source stream · {amount}", event=False)
-
-        source_path = download_youtube_local(youtube_url, fmt=download_format, out_dir=out_dir, on_bytes=download_progress)
-        report("download", 26, "YouTube source is ready")
-    else:
-        report("download", 5, "Checking the uploaded video and audio tracks")
+    report = progress_reporter(on_progress)
+    source_path = prepare_source(youtube_url, uploaded_video, download_format, out_dir, report)
+    if uploaded_video is not None:
         validate_local_video(uploaded_video)
-        source_path = str(uploaded_video)
-        report("download", 26, "Uploaded video is ready")
+    report("download", 26, "Uploaded video is ready" if uploaded_video is not None else "YouTube source is ready")
 
-    report("transcribe", 28, "Preparing audio and the local Whisper model")
-    transcript = transcribe_local(
-        source_path, language=language, out_dir=out_dir,
-        allow_legacy=caption_style == "off" and not whisper_model, whisper_model=whisper_model,
-        on_progress=lambda done, total: report(
-            "transcribe", 29 + int(24 * done / total),
-            f"Transcribing speech · {_clock(done)} of {_clock(total)}", event=False,
-        ),
-    )
+    transcript = transcribe_source(source_path, language, out_dir, caption_style, whisper_model, report,
+                                   transcription=transcription)
     if not transcript["segments"]:
         raise RuntimeError(
             "Whisper produced no segments. The video may have no detectable speech."

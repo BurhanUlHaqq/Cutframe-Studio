@@ -76,7 +76,7 @@ CHUNK_OVERLAP_SECONDS = 60
 MAX_HIGHLIGHT_API_ATTEMPTS = 3
 
 
-def _parse_json_loose(raw: str) -> Dict:
+def parse_model_json(raw: str) -> Dict:
     """Strip any markdown fences and parse the model's JSON."""
     text = raw.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -148,7 +148,7 @@ def detect_content_type(transcript: Dict, llm_fn: LLMFn = call_local_llm) -> Dic
     )
     try:
         raw = llm_fn(prompt)
-        parsed = _parse_json_loose(raw)
+        parsed = parse_model_json(raw)
         if isinstance(parsed, dict):
             return parsed
     except Exception:
@@ -233,7 +233,7 @@ def call_highlight_api(
     for attempt in range(1, MAX_HIGHLIGHT_API_ATTEMPTS + 1):
         raw = llm_fn(prompt)
         try:
-            parsed = _parse_json_loose(raw)
+            parsed = parse_model_json(raw)
             candidates = parsed.get("highlights")
             highlights = _sanitize_highlights(candidates, duration=duration, require_score=min_viral_score is not None)
             if highlights or (min_viral_score is not None and candidates == []):

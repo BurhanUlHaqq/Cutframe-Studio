@@ -1,59 +1,72 @@
 # Cutframe Studio
 
-Turn YouTube links and local video files into short clips. The Next.js studio queues a Django worker that transcribes with faster-whisper, ranks highlights with your chosen AI provider, and renders with FFmpeg and OpenCV.
+Turn YouTube links and local video files into short clips or one highlight reel. The Next.js studio queues a Django worker that transcribes with faster-whisper and renders with FFmpeg and OpenCV.
 
 ## Run with Docker Compose
 
 1. Start Docker Desktop. Create the `D:\volumes\Cutframe` folder if it does not exist.
-2. Configure a ranking provider in **Settings → AI models** after startup, or copy `.env.example` to `.env` and set the server defaults before startup.
-3. From the project root, build and start the stack.
+2. From the project root, build and start the stack.
 
    ```powershell
    docker compose up -d --build
    ```
 
-4. Open [Cutframe Studio](http://localhost:5031).
+3. Open [Cutframe Studio](http://localhost:5031). Configure a ranking provider under **Settings → AI models** if you plan to use Short Clips or AI transcript selection. Highlights can also run with local visual selection.
 
 | Service | Host address |
 | --- | --- |
 | Next.js studio | `http://localhost:5031` |
 | Django API | `http://localhost:5032/api/` |
 | Render worker | Runs on the Docker network |
+| Publisher | Runs on the Docker network |
 | PostgreSQL 17 | `db:5432` on the Docker network |
 
-The web and API ports bind to the local loopback interface. Set `STUDIO_PORT` and `STUDIO_API_PORT` in `.env` to override them. Set `STUDIO_DATA_PATH` to an existing absolute host folder when using another drive or operating system.
+The app runs without an `.env` file. Application settings are saved from the browser. Docker Compose binds the web and API ports to loopback and mounts the data directory before Django can connect to PostgreSQL. To use a different drive, change all three host paths in `compose.yaml` together.
 
-PostgreSQL stores render history, clip metadata, workspace preferences, AI settings, and browser sessions in `D:\volumes\Cutframe\postgres`. Compose creates a database password in `D:\volumes\Cutframe\postgres-config` on first startup. Keep that folder and `django.secret` with the storage so the app can connect to the database and decrypt saved provider credentials.
+PostgreSQL stores app settings, encrypted provider credentials, publishing accounts, render history, clip metadata, workspace preferences, and browser sessions in `D:\volumes\Cutframe\postgres`. Compose creates a database password in `D:\volumes\Cutframe\postgres-config` on first startup. Back up that folder and `django.secret` with the database so Cutframe can connect and decrypt the saved credentials.
 
 On the first PostgreSQL startup, Cutframe copies the previous `studio.sqlite3` into the new database. The original SQLite file stays available as a backup. Uploaded media, rendered clips, ZIP exports, and the Whisper cache continue to live in the shared storage folder. Use the same browser and hostname to access your render history.
 
 When running Django directly without Docker Compose, it uses SQLite by default. Set `STUDIO_DB_HOST`, `STUDIO_DB_NAME`, `STUDIO_DB_USER`, and `STUDIO_DB_PASSWORD` to connect to PostgreSQL.
 
-Docker builds use PyPI by default. Set `CUTFRAME_PYPI_INDEX` to a trusted Python package mirror if PyPI downloads are slow.
+If you use a Python package mirror for builds, pass `--build-arg UV_DEFAULT_INDEX=https://your-mirror.example/simple` to `docker compose build backend`.
+
+### Import settings from an older installation
+
+If you have an old settings file, start the updated stack with its existing data mount. Run this one-time import from PowerShell. It copies known app settings, keeps values already saved in the database, and encrypts imported credentials.
+
+```powershell
+$legacySettings = (Resolve-Path .\.env).Path
+docker compose run --rm --no-deps -T --volume "${legacySettings}:/run/cutframe-legacy.env:ro" backend python manage.py import_legacy_settings /run/cutframe-legacy.env
+```
+
+Verify the settings in the browser. You can archive the old file outside the project. If the old deployment used custom ports or storage paths, match them in Compose before starting the new stack. If you explicitly overrode Django's encryption key through `DJANGO_SECRET_KEY`, preserve that same bootstrap key in the shared data directory's `django.secret` before upgrading so existing encrypted credentials remain readable.
 
 ## Workspace settings
 
 Open **Settings** to save the default clip selection, clip length, aspect ratio, source quality, transcription language, framing, and caption style. Choose **By clip count** to render up to that many clips, or **By viral score** to keep every ranked highlight that meets your minimum. Leave the length fields blank for automatic timing, or set a minimum and maximum in seconds. You can override those values for one render.
 
+In **Render defaults**, choose which mode opens first and save the Highlights runtime cap and moment-selection method.
+
 The render details page shows the worker's current action above the estimated overall progress bar. The activity log records stage changes, completed steps, and any errors.
 
 ## Upload a local video
 
-Choose **Upload video** on the new render page and select a file with audio. Cutframe accepts MP4, MOV, M4V, MKV, WebM, AVI, MPEG, and MPEG transport stream files. Uploads default to a 2 GB limit per video. Set `STUDIO_MAX_UPLOAD_BYTES` in `.env` to change it. Uploaded sources live in the job’s folder under your configured storage path and are reused on retry.
+Choose **Upload video** on the new render page. Short Clips requires an audio track. Highlights accepts silent footage and can select moments by visual activity. Cutframe accepts MP4, MOV, M4V, MKV, WebM, AVI, MPEG, and MPEG transport stream files. Change the default 2 GiB upload limit under **Settings → Storage**. Uploaded sources live in the job’s folder and are reused on retry.
 
 ## Configure AI models
 
-**Settings → AI models** saves your ranking provider, model ID, and local Whisper model for this browser. The worker uses the saved settings when it starts a render. Choose **Server environment** to use the provider and model configured in `.env`. API keys entered in Settings are encrypted in the local database. **Check connection** checks model visibility through the provider’s model metadata API.
+**Settings → AI models** has **Installation defaults** for shared provider, model, API key, Whisper device, and voice detection settings. Use **This browser** to override the defaults for a workspace. The worker reads the database when starting a render. API keys are write-only in the UI. **Check connection** checks model visibility through the provider’s metadata API.
 
 Select **Load models** to see the options available through the current connection, or enter a model ID manually. You can choose a different ranking model while keeping the server environment's provider and credentials. Select **Use default** to restore its configured model.
 
-| Provider | Server environment | Example API base URL |
-| --- | --- | --- |
-| OpenAI | `LLM_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_MODEL` | Built in |
-| Google Gemini | `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL` | Built in |
-| Ollama, LM Studio, vLLM, OpenRouter, or another compatible server | `LLM_PROVIDER=compatible`, `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY` | `http://host.docker.internal:11434/v1` for Ollama on Docker Desktop |
+| Provider | Configure in Settings |
+| --- | --- |
+| OpenAI | API key and ranking model |
+| Google Gemini | API key and ranking model |
+| OpenAI-compatible server | API base URL, model ID, and optional API key |
 
-Start your local model server and load the model before running Cutframe’s connection check. When running both apps directly on the host, use `http://localhost:11434/v1` for Ollama. Recreate the containers with `docker compose up -d` after changing server environment values. [OpenShorts local model setup](https://github.com/mutonby/openshorts#6-run-without-a-google-key-local-llm-optional) · [Ollama API compatibility](https://docs.ollama.com/api/openai-compatibility)
+Start your local model server and load the model before running Cutframe’s connection check. For Ollama on Docker Desktop use `http://host.docker.internal:11434/v1`. When running both apps directly on the host, use `http://localhost:11434/v1`. Saved settings apply without restarting. [OpenShorts local model setup](https://github.com/mutonby/openshorts#6-run-without-a-google-key-local-llm-optional) · [Ollama API compatibility](https://docs.ollama.com/api/openai-compatibility)
 
 ## Detect, reframe, and caption
 
@@ -64,6 +77,12 @@ Start your local model server and load the model before running Cutframe’s con
 The feature design draws on OpenShorts. [OpenShorts reference](https://github.com/mutonby/openshorts)
 
 Face detection runs locally with the bundled YuNet model. [OpenCV YuNet and its license](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
+
+## Assemble a highlight reel
+
+Choose **Highlights** on the new render page and set a maximum of 1–30 minutes. Cutframe assembles one 16:9 MP4, keeps the full frame visible, and preserves the order of the source. The actual runtime depends on the selected moments. **AI transcript** uses your configured ranking model to choose self-contained story beats. **Local visual activity** selects footage by sampled frame changes and works without a ranking provider. Turn captions off to skip Whisper when using local visual activity.
+
+Use the chapter list to jump to each moment and see its original timestamp. The ZIP includes the MP4, a JPG thumbnail, and title and description text, plus an SRT when speech captions were generated. Eligible YouTube chapters are written to the TXT and appended when publishing to YouTube from Cutframe. YouTube requires a verified account for uploads over 15 minutes. [Story-driven summarization](https://openaccess.thecvf.com/content_cvpr_2013/papers/Lu_Story-Driven_Summarization_for_2013_CVPR_paper.pdf) · [YouTube chapter requirements](https://support.google.com/youtube/answer/9884579) · [YouTube upload length limits](https://support.google.com/youtube/answer/71673)
 
 ## Export clips
 
@@ -81,6 +100,10 @@ New renders produce specific titles and short descriptions in the clip's spoken 
 
 The ZIP uses the latest saved titles and descriptions. Captioned clips include the SRT file. Text edits reuse the rendered media and require zero ranking requests.
 
+## Publish clips
+
+Save developer app credentials in **Settings → Publishing**, then open **Publish Studio** to connect the account and queue or schedule a finished video. The [local publishing guide](docs/publish-studio.md) covers YouTube on localhost, stable HTTPS callbacks for TikTok and Instagram, and troubleshooting.
+
 ## Project layout
 
 ```text
@@ -95,10 +118,9 @@ frontend/
   public/            Static artwork
   Dockerfile
 compose.yaml
-.env.example
 ```
 
-The worker downloads the selected Whisper model on first use. Set `LOCAL_WHISPER_MODEL` and `LOCAL_WHISPER_DEVICE` in `.env` to control local transcription. Edit `backend/shorts_generator/highlights.py` to adjust highlight ranking criteria.
+The worker downloads the selected Whisper model on first use. Choose the model and device in **Settings → AI models**.
 
 ## Tests and operations
 

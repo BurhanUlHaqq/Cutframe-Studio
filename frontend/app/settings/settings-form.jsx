@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { Check, RotateCcw, Save } from "lucide-react";
 import { usePreferences } from "../preferences";
-import RenderOptions, { SelectField } from "../render-options";
+import RenderOptions, { HighlightOptions, SelectField, studioModes } from "../render-options";
 import AISettings from "./ai-settings";
+import PublishingSettings from "./publishing-settings";
+import StorageSettings from "./storage-settings";
 import { settingsSections, useSettingsSection } from "./sections";
 
 const themes = [["light", "Light"], ["dark", "Dark"], ["system", "Match system"]];
@@ -88,7 +90,7 @@ function PreferencesPanel({ section, description, children }) {
 
 export default function SettingsForm() {
   const active = useSettingsSection();
-  const { render, models, appearance } = settingsSections;
+  const { render, models, publishing, storage, appearance } = settingsSections;
 
   useEffect(() => {
     if (window.location.hash !== `#${active.id}`) return;
@@ -110,11 +112,27 @@ export default function SettingsForm() {
       </nav>
       <div hidden={active !== render}>
         <PreferencesPanel section={render} description="Starting options for every new render.">
-          {(values, change) => <RenderOptions value={values} onChange={change} />}
+          {(values, change) => <>
+            <SelectField label="Default studio mode" value={values.studio_mode} choices={studioModes}
+              onChange={(studio_mode) => change({ studio_mode })} />
+            <section className="mode-preferences"><h3>Highlights defaults</h3>
+              <HighlightOptions value={values} onChange={change} />
+            </section>
+            <section className="mode-preferences"><h3>Short Clips defaults</h3>
+              <RenderOptions value={values} onChange={change} />
+              <small className="selection-hint">Language, quality, and captions also apply to Highlights.</small>
+            </section>
+          </>}
         </PreferencesPanel>
       </div>
       <div hidden={active !== models}>
         <AISettings />
+      </div>
+      <div hidden={active !== publishing}>
+        <PublishingSettings />
+      </div>
+      <div hidden={active !== storage}>
+        <StorageSettings />
       </div>
       <div hidden={active !== appearance}>
         <PreferencesPanel section={appearance} description="Display preferences for this browser.">

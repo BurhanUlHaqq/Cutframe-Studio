@@ -11,7 +11,9 @@ FRAMING_MODES = [
 ]
 CAPTION_STYLES = [("classic", "Classic captions"), ("highlight", "Highlighted words"), ("off", "Captions off")]
 DEFAULT_VIRAL_SCORE = 80
+DEFAULT_HIGHLIGHT_MINUTES = 10
 RENDER_OPTIONS = (
+    "studio_mode", "highlight_minutes", "highlight_method",
     "selection_mode", "clip_count", "min_viral_score", "aspect_ratio", "quality", "language", "framing", "caption_style",
     "min_clip_seconds", "max_clip_seconds",
 )
@@ -23,6 +25,16 @@ class ClipSelection(models.TextChoices):
     SCORE = "score", "By viral score"
 
 
+class StudioMode(models.TextChoices):
+    SHORTS = "shorts", "Short Clips"
+    HIGHLIGHTS = "highlights", "Highlights"
+
+
+class HighlightMethod(models.TextChoices):
+    TRANSCRIPT = "transcript", "AI transcript"
+    ACTIVITY = "activity", "Local visual activity"
+
+
 class WorkspacePreferences(models.Model):
     class Theme(models.TextChoices):
         LIGHT = "light", "Light"
@@ -30,6 +42,9 @@ class WorkspacePreferences(models.Model):
         SYSTEM = "system", "Match system"
 
     owner = models.UUIDField(primary_key=True, editable=False)
+    studio_mode = models.CharField(max_length=10, choices=StudioMode, default=StudioMode.SHORTS)
+    highlight_minutes = models.PositiveSmallIntegerField(default=DEFAULT_HIGHLIGHT_MINUTES)
+    highlight_method = models.CharField(max_length=10, choices=HighlightMethod, default=HighlightMethod.TRANSCRIPT)
     selection_mode = models.CharField(max_length=5, choices=ClipSelection, default=ClipSelection.COUNT)
     clip_count = models.PositiveSmallIntegerField(default=5)
     min_viral_score = models.PositiveSmallIntegerField(default=DEFAULT_VIRAL_SCORE)
@@ -49,6 +64,12 @@ class WorkspaceAISettings(models.Model):
     config = models.JSONField(default=dict)
 
 
+class InstallationSettings(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    ai = models.JSONField(default=dict)
+    max_upload_bytes = models.PositiveBigIntegerField(null=True, blank=True)
+
+
 class Job(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
@@ -61,6 +82,9 @@ class Job(models.Model):
     source_url = models.URLField(blank=True)
     video_id = models.CharField(max_length=11, blank=True)
     source_name = models.CharField(max_length=255, blank=True)
+    studio_mode = models.CharField(max_length=10, choices=StudioMode, default=StudioMode.SHORTS)
+    highlight_minutes = models.PositiveSmallIntegerField(default=DEFAULT_HIGHLIGHT_MINUTES)
+    highlight_method = models.CharField(max_length=10, choices=HighlightMethod, default=HighlightMethod.TRANSCRIPT)
     selection_mode = models.CharField(max_length=5, choices=ClipSelection, default=ClipSelection.COUNT)
     clip_count = models.PositiveSmallIntegerField()
     min_viral_score = models.PositiveSmallIntegerField(default=DEFAULT_VIRAL_SCORE)

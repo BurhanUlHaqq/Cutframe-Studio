@@ -3,18 +3,20 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from django import forms
-from django.conf import settings
 
 from shorts_generator.url_validation import validate_youtube_url
 
 from .models import (
     ASPECT_RATIOS, CAPTION_STYLES, DEFAULT_VIRAL_SCORE, FRAMING_MODES, SOURCE_QUALITIES,
-    ClipSelection, WorkspacePreferences,
+    ClipSelection, StudioMode, HighlightMethod, WorkspacePreferences,
 )
-from .uploads import VIDEO_EXTENSIONS
+from .uploads import VIDEO_EXTENSIONS, upload_limit
 
 
 class RenderOptionsForm(forms.Form):
+    studio_mode = forms.ChoiceField(choices=StudioMode.choices)
+    highlight_minutes = forms.IntegerField(min_value=1, max_value=30)
+    highlight_method = forms.ChoiceField(choices=HighlightMethod.choices)
     selection_mode = forms.ChoiceField(choices=ClipSelection.choices)
     clip_count = forms.IntegerField(min_value=1, max_value=10)
     min_viral_score = forms.IntegerField(required=False, min_value=0, max_value=100)
@@ -49,6 +51,9 @@ class PreferencesForm(RenderOptionsForm):
 class JobForm(RenderOptionsForm):
     source_url = forms.CharField(max_length=2048)
 
+    def clean(self):
+        return highlight_job_options(super().clean())
+
     def clean_source_url(self):
         try:
             url = urlsplit(validate_youtube_url(self.cleaned_data["source_url"]))
@@ -80,10 +85,28 @@ class ClipTextForm(forms.Form):
 class UploadJobForm(RenderOptionsForm):
     video = forms.FileField(max_length=255)
 
+    def __init__(self, *args, max_upload_bytes=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_upload_bytes = max_upload_bytes
+
+    def clean(self):
+        return highlight_job_options(super().clean())
+
     def clean_video(self):
         video = self.cleaned_data["video"]
         if Path(video.name).suffix.lower() not in VIDEO_EXTENSIONS:
             raise forms.ValidationError("Choose a supported video file, such as MP4, MOV, MKV, or WebM.")
-        if video.size > settings.STUDIO_MAX_UPLOAD_BYTES:
-            raise forms.ValidationError("This video exceeds the workspace upload limit.")
+        if video.size > (self.max_upload_bytes or upload_limit()):
+            raise forms.ValidationError("This video exceeds the installation upload limit.")
         return video
+
+
+def highlight_job_options(data):
+    if data.get("studio_mode") == StudioMode.HIGHLIGHTS:
+        data.update(aspect_ratio="16:9", clip_count=1, selection_mode=ClipSelection.COUNT,
+                    min_clip_seconds=None, max_clip_seconds=None)
+    return data
+
+
+class StorageSettingsForm(forms.Form):
+    max_upload_mib = forms.IntegerField(min_value=1, max_value=16384)

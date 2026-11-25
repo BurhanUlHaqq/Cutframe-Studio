@@ -1,11 +1,13 @@
-from django.urls import path
+from django.urls import include, path
 
 from . import views
 
 urlpatterns = [
     path("api/health/", views.health, name="health"),
+    path("api/publishing/", include("publishing.urls")),
     path("api/session/", views.session, name="session"),
     path("api/preferences/", views.preferences, name="preferences"),
+    path("api/storage-settings/", views.storage_settings, name="storage_settings"),
     path("api/ai-settings/", views.ai_settings, name="ai_settings"),
     path("api/ai-settings/check/", views.ai_connection, name="ai_connection"),
     path("api/ai-settings/models/", views.ai_connection, {"discover": True}, name="ai_models"),

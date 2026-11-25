@@ -8,12 +8,9 @@ x-database: &database
 
 x-django: &django
   image: cutframe-studio-backend
-  env_file:
-    - path: .env
-      required: false
   volumes:
     - type: bind
-      source: "${STUDIO_DATA_PATH:-D:/volumes/Cutframe}"
+      source: D:/volumes/Cutframe
       target: /data
       bind:
         create_host_path: false
@@ -46,10 +43,10 @@ services:
     command: ["postgres"]
     volumes:
       - type: bind
-        source: "${STUDIO_DATA_PATH:-D:/volumes/Cutframe}/postgres"
+        source: D:/volumes/Cutframe/postgres
         target: /var/lib/postgresql/data
       - type: bind
-        source: "${STUDIO_DATA_PATH:-D:/volumes/Cutframe}/postgres-config"
+        source: D:/volumes/Cutframe/postgres-config
         target: /credentials
     healthcheck:
       test: ["CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-U", "cutframe", "-d", "cutframe"]
@@ -62,14 +59,11 @@ services:
     <<: *django
     build:
       context: backend
-      args:
-        UV_DEFAULT_INDEX: ${CUTFRAME_PYPI_INDEX:-https://pypi.org/simple}
     environment:
       <<: *database
       STUDIO_DATA_DIR: /data
-      DJANGO_CSRF_TRUSTED_ORIGINS: "${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:${STUDIO_PORT:-5031},http://127.0.0.1:${STUDIO_PORT:-5031}}"
     ports:
-      - "127.0.0.1:${STUDIO_API_PORT:-5032}:8000"
+      - "127.0.0.1:5032:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -95,12 +89,23 @@ services:
       backend:
         condition: service_healthy
         restart: true
+  publisher:
+    <<: *django
+    pull_policy: never
+    environment:
+      <<: *database
+      STUDIO_DATA_DIR: /data
+    command: ["python", "manage.py", "process_publications"]
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
   frontend:
     build:
       context: frontend
     image: cutframe-studio-frontend
     ports:
-      - "127.0.0.1:${STUDIO_PORT:-5031}:3000"
+      - "127.0.0.1:5031:3000"
     depends_on:
       backend:
         condition: service_healthy

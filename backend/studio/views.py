@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from django.conf import settings
-from django.db import DatabaseError, connection
+from django.db import DatabaseError, connection, transaction
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404
@@ -19,12 +19,13 @@ from filelock import FileLock
 from shorts_generator.local.llm import RankingConfigurationError, RankingModelUnavailable, check_connection, list_ranking_models
 
 from .ai_settings import (
-    AISettingsForm, ModelDiscoveryForm, ai_settings_data, merge_ai_options, resolve_ai_options, saved_ai_options,
+    AISettingsForm, ModelDiscoveryForm, ai_settings_data, installation_ai, installation_options,
+    merge_ai_options, merge_installation, resolve_ai_options, saved_ai_options,
 )
 from .exports import clip_text, job_directory, open_archive, open_published_video, publication_filename
-from .forms import ClipTextForm, JobForm, PreferencesForm, UploadJobForm
-from .models import PREFERENCE_FIELDS, RENDER_OPTIONS, Job, WorkspaceAISettings, WorkspacePreferences
-from .uploads import VIDEO_EXTENSIONS, store_upload
+from .forms import ClipTextForm, JobForm, PreferencesForm, StorageSettingsForm, UploadJobForm
+from .models import InstallationSettings, PREFERENCE_FIELDS, RENDER_OPTIONS, Job, StudioMode, WorkspaceAISettings, WorkspacePreferences
+from .uploads import MIB, VIDEO_EXTENSIONS, store_upload, upload_limit
 
 
 def render_data(job, *, include_activity=True):
@@ -41,6 +42,7 @@ def render_data(job, *, include_activity=True):
     return {
         "id": str(job.id), "video_id": job.video_id, "source_url": job.source_url,
         "source_name": job.source_name, "source_type": "upload" if job.source_name else "youtube",
+        "studio_mode": job.studio_mode, "highlight_minutes": job.highlight_minutes, "highlight_method": job.highlight_method,
         "selection_mode": job.selection_mode, "min_viral_score": job.min_viral_score,
         "clip_count": job.clip_count, "aspect_ratio": job.aspect_ratio, "quality": job.quality,
         "framing": job.framing, "caption_style": job.caption_style,
@@ -79,7 +81,7 @@ def preference_values(preferences, fields=PREFERENCE_FIELDS):
     return {field: getattr(preferences, field) for field in fields}
 
 
-def form_data(request, form_class, defaults=None):
+def form_data(request, form_class, defaults=None, **form_kwargs):
     if request.content_type != "application/json":
         return None, JsonResponse({"error": "Send the form as JSON."}, status=415)
     try:
@@ -88,7 +90,7 @@ def form_data(request, form_class, defaults=None):
         return None, JsonResponse({"error": "The request could not be read."}, status=400)
     if not isinstance(payload, dict):
         return None, JsonResponse({"error": "Send a form object."}, status=400)
-    form = form_class((defaults or {}) | payload)
+    form = form_class((defaults or {}) | payload, **form_kwargs)
     if not form.is_valid():
         return None, JsonResponse({"fields": form.errors.get_json_data()}, status=400)
     return form.cleaned_data, None
@@ -129,25 +131,47 @@ def preferences(request):
 @require_http_methods(["GET", "POST"])
 @never_cache
 def ai_settings(request):
+    global_scope = request.GET.get("scope") == "installation"
+    if global_scope and request.method == "POST":
+        with transaction.atomic():
+            row, _ = InstallationSettings.objects.select_for_update().get_or_create(pk=1)
+            data, error = form_data(request, AISettingsForm, defaults=installation_options(row.ai), installation=row.ai)
+            if error is not None:
+                return error
+            row.ai = merge_installation(row.ai, data)
+            row.save(update_fields=["ai"])
+        return JsonResponse(ai_settings_data(installation_options(row.ai), row.ai, global_scope=True))
+
+    installation = installation_ai()
+    if global_scope:
+        return JsonResponse(ai_settings_data(installation_options(installation), installation, global_scope=True))
     options = saved_ai_options(request.session.get("studio_owner"))
     if request.method == "POST":
-        data, error = form_data(request, AISettingsForm)
+        data, error = form_data(request, AISettingsForm, defaults=options, installation=installation)
         if error is not None:
             return error
         options = merge_ai_options(data, options)
         WorkspaceAISettings.objects.update_or_create(owner=ensure_owner(request), defaults={"config": options})
-    return JsonResponse(ai_settings_data(options))
+    return JsonResponse(ai_settings_data(options, installation))
 
 
 @require_POST
 @never_cache
 def ai_connection(request, *, discover=False):
-    data, error = form_data(request, ModelDiscoveryForm if discover else AISettingsForm)
+    installation = installation_ai()
+    global_scope = request.GET.get("scope") == "installation"
+    saved = installation_options(installation) if global_scope else saved_ai_options(request.session.get("studio_owner"))
+    data, error = form_data(request, ModelDiscoveryForm if discover else AISettingsForm, defaults=saved,
+                            installation=installation)
     if error is not None:
         return error
-    options = merge_ai_options(data, saved_ai_options(request.session.get("studio_owner")))
     try:
-        config = resolve_ai_options(options)
+        if global_scope:
+            installation = merge_installation(installation, data)
+            options = installation_options(installation)
+        else:
+            options = merge_ai_options(data, saved)
+        config = resolve_ai_options(options, installation)
         if discover:
             return JsonResponse({"models": list_ranking_models(config)})
         check_connection(config)
@@ -168,6 +192,18 @@ def ai_connection(request, *, discover=False):
     return JsonResponse({"message": "The selected model is visible to Cutframe."})
 
 
+@require_http_methods(["GET", "POST"])
+@never_cache
+def storage_settings(request):
+    if request.method == "POST":
+        data, error = form_data(request, StorageSettingsForm)
+        if error is not None:
+            return error
+        InstallationSettings.objects.update_or_create(pk=1, defaults={"max_upload_bytes": data["max_upload_mib"] * MIB})
+    maximum = upload_limit()
+    return JsonResponse({"max_upload_bytes": maximum, "max_upload_mib": max(1, maximum // MIB)})
+
+
 @never_cache
 def jobs(request):
     owner = request.session.get("studio_owner")
@@ -175,7 +211,7 @@ def jobs(request):
         renders = Job.objects.filter(owner=owner)[:50] if owner else []
         return JsonResponse({
             "jobs": [render_data(job, include_activity=False) for job in renders],
-            "upload": {"max_bytes": settings.STUDIO_MAX_UPLOAD_BYTES, "extensions": VIDEO_EXTENSIONS},
+            "upload": {"max_bytes": upload_limit(), "extensions": VIDEO_EXTENSIONS},
         })
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed."}, status=405, headers={"Allow": "GET, POST"})
@@ -194,7 +230,8 @@ def upload_job(request):
     if request.content_type != "multipart/form-data":
         return JsonResponse({"error": "Send the video as a multipart upload."}, status=415)
     defaults = preference_values(saved_preferences(request.session.get("studio_owner")), RENDER_OPTIONS)
-    form = UploadJobForm(defaults | request.POST.dict(), request.FILES)
+    form = UploadJobForm(defaults | request.POST.dict(), request.FILES,
+                         max_upload_bytes=getattr(request, "studio_upload_limit", None))
     if not form.is_valid():
         return JsonResponse({"fields": form.errors.get_json_data()}, status=400)
     data = form.cleaned_data
@@ -262,7 +299,8 @@ def archive(request, job_id):
     except FileNotFoundError as exc:
         raise Http404 from exc
     source = job.video_id or slugify(Path(job.source_name).stem, allow_unicode=True)[:64].strip("-") or str(job.id)[:8]
-    return FileResponse(handle, as_attachment=True, filename=f"cutframe-{source}.zip")
+    prefix = "cutframe-highlights" if job.studio_mode == StudioMode.HIGHLIGHTS else "cutframe"
+    return FileResponse(handle, as_attachment=True, filename=f"{prefix}-{source}.zip")
 
 
 def stream_range(path, start, remaining):

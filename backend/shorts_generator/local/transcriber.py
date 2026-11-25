@@ -10,7 +10,7 @@ from typing import Callable, Dict, Optional
 
 import numpy as np
 
-from ..config import LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL
+from ..config import DEFAULT_VAD_PARAMETERS, DEFAULT_WHISPER_MODEL
 
 
 def _parse_srt_timestamp(value: str) -> float:
@@ -49,9 +49,9 @@ def _load_srt_cache(cache_path: Path) -> Dict:
     return {"duration": duration, "segments": segments}
 
 
-def _resolve_device() -> str:
-    if LOCAL_WHISPER_DEVICE != "auto":
-        return LOCAL_WHISPER_DEVICE
+def _resolve_device(requested: str) -> str:
+    if requested != "auto":
+        return requested
     try:
         import torch  # type: ignore
         if torch.cuda.is_available():
@@ -80,15 +80,19 @@ def _decode_audio(media_path: str, sample_rate: int) -> np.ndarray:
 def transcribe_local(
     media_path: str, *, out_dir: str, language: Optional[str] = None, allow_legacy: bool = False,
     whisper_model: Optional[str] = None,
+    whisper_device: str = "auto", vad_filter: bool = False, vad_parameters: Optional[Dict] = None,
     on_progress: Optional[Callable[[float, float], None]] = None,
 ) -> Dict:
     """Run Whisper or reuse a transcript matching this source, model, and language."""
     source = Path(media_path)
-    model_name = whisper_model or LOCAL_WHISPER_MODEL
+    model_name = whisper_model or DEFAULT_WHISPER_MODEL
+    vad_options = DEFAULT_VAD_PARAMETERS | (vad_parameters or {}) if vad_filter else {}
     stat = source.stat()
     cache_path = Path(out_dir) / f"{source.stem}.transcript.json"
     identity = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size,
                 "model": model_name, "language": language}
+    if vad_filter:
+        identity["vad"] = vad_options
     try:
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         if cached["source"] == identity and cached["segments"] and cached["duration"] > 0:
@@ -98,7 +102,7 @@ def transcribe_local(
         pass
 
     legacy = Path(out_dir) / f"{source.stem}.srt"
-    if allow_legacy and legacy.is_file() and legacy.stat().st_mtime_ns >= stat.st_mtime_ns:
+    if allow_legacy and not vad_filter and legacy.is_file() and legacy.stat().st_mtime_ns >= stat.st_mtime_ns:
         try:
             cached = _load_srt_cache(legacy)
             if cached["segments"] and cached["duration"] > 0:
@@ -114,11 +118,9 @@ def transcribe_local(
             "    pip install -r requirements.txt"
         ) from e
 
-    device = _resolve_device()
+    device = _resolve_device(whisper_device)
     compute_type = "float16" if device == "cuda" else "int8"
     print(f"[transcribe/local] faster-whisper model={model_name} device={device}", flush=True)
-
-    from ..config import LOCAL_WHISPER_VAD_FILTER, LOCAL_WHISPER_VAD_PARAMETERS
 
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
 
@@ -129,9 +131,9 @@ def transcribe_local(
         "condition_on_previous_text": False,
         "word_timestamps": True,
     }
-    if LOCAL_WHISPER_VAD_FILTER:
+    if vad_filter:
         transcribe_kwargs["vad_filter"] = True
-        transcribe_kwargs["vad_parameters"] = LOCAL_WHISPER_VAD_PARAMETERS
+        transcribe_kwargs["vad_parameters"] = vad_options
     else:
         transcribe_kwargs["vad_filter"] = False
 

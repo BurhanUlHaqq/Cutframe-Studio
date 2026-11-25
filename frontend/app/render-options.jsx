@@ -13,6 +13,8 @@ const qualities = [["480", "480p"], ["720", "720p"], ["1080", "1080p"]];
 const framings = [["auto", "Smart framing"], ["stream", "Screen + streamer"], ["center", "Center crop"], ["fit", "Fit with blur"]];
 const captionStyles = [["classic", "Classic captions"], ["highlight", "Highlighted words"], ["off", "Off"]];
 const selectionModes = [["count", "By clip count"], ["score", "By viral score"]];
+export const studioModes = [["shorts", "Short Clips"], ["highlights", "Highlights"]];
+const highlightMethods = [["transcript", "AI transcript"], ["activity", "Local visual activity"]];
 
 const languages = [
   ["", "Auto-detect"], ["en", "English"], ["ur", "Urdu"], ["hi", "Hindi"],
@@ -32,6 +34,48 @@ export function SelectField({ label, value, choices, onChange }) {
         </select>
         <ChevronDown size={16} aria-hidden="true" />
       </div>
+    </div>
+  );
+}
+
+export function HighlightOptions({ value, onChange, showShared = false }) {
+  const id = useId();
+  const minutes = value.highlight_minutes;
+  const language = value.language;
+  const languageOptions = languages.some(([code]) => code === language) ? languages : [...languages, [language, language.toUpperCase()]];
+  return (
+    <div className="highlight-options">
+      <div>
+        <label htmlFor={id}>Maximum reel length</label>
+        <div className="input-wrap number-with-unit">
+          <input id={id} type="number" min={1} max={30} required value={minutes ?? ""}
+            aria-describedby={`${id}-hint`}
+            onChange={(event) => onChange({ highlight_minutes: event.target.value === "" ? null : Number(event.target.value) })} />
+          <span aria-hidden="true">min</span>
+        </div>
+        <div className="highlight-presets" role="group" aria-label="Reel length presets">
+          {[3, 10, 20, 30].map((length) => <button key={length} type="button" className="secondary-button"
+            aria-pressed={minutes === length} onClick={() => onChange({ highlight_minutes: length })}>{length} min</button>)}
+        </div>
+        <small id={`${id}-hint`}>Choose 1–30 minutes. The reel can finish sooner when there are fewer useful moments.</small>
+      </div>
+      <div className="options highlight-production">
+        <SelectField label="Moment selection" value={value.highlight_method} choices={highlightMethods}
+          onChange={(next) => onChange({ highlight_method: next })} />
+        {showShared && <SelectField label="Output quality" value={value.quality} choices={qualities}
+          onChange={(next) => onChange({ quality: next })} />}
+      </div>
+      <small>{value.highlight_method === "activity" ? "Uses motion across the source. Works without a ranking provider."
+        : "Uses the configured ranking model to find complete story beats. Falls back to visual activity when dialogue or a configured model is unavailable."}</small>
+      {showShared && (
+        <div className="options highlight-production">
+          <SelectField label="Captions" value={value.caption_style} choices={captionStyles}
+            onChange={(next) => onChange({ caption_style: next })} />
+          {(value.highlight_method === "transcript" || value.caption_style !== "off") &&
+            <SelectField label="Transcription language" value={language} choices={languageOptions}
+              onChange={(next) => onChange({ language: next })} />}
+        </div>
+      )}
     </div>
   );
 }
