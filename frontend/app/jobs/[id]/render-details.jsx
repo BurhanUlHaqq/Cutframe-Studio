@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import {
-  AlertCircle, Archive, Captions, Check, Clapperboard, Copy, Download, FileText,
+  AlertCircle, Archive, Captions, Check, ChevronDown, Clapperboard, Copy, Download, Ellipsis, FileText,
   Film, Image as ImageIcon, List, LoaderCircle, Pencil, Play, Plus, RotateCcw, Send,
 } from "lucide-react";
 import { api, stages, statusLabels, submit } from "../../api";
@@ -12,7 +12,7 @@ import { usePreferences } from "../../preferences";
 import { editingStyles, SelectField } from "../../render-options";
 import ThumbnailEditor from "./thumbnail-editor";
 
-const terminal = new Set(["complete", "failed", "deleting"]);
+const terminal = new Set(["complete", "failed", "cancelled", "deleting"]);
 const descriptionTargets = [["social", "General social"], ["youtube", "YouTube"], ["instagram", "Instagram Reels"], ["tiktok", "TikTok"]];
 const eventTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
@@ -23,11 +23,11 @@ function formatTime(seconds) {
   return `${hours ? `${hours}:${String(minutes).padStart(2, "0")}` : minutes}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-function RenderActivity({ events = [], active }) {
+function RenderActivity({ events = [], active, failed }) {
   if (!active && !events.length) return null;
   return (
-    <section className="render-activity" aria-labelledby="render-activity-title">
-      <h2 id="render-activity-title"><List size={18} aria-hidden="true" /> Render activity</h2>
+    <details className="render-activity" open={active || failed}>
+      <summary><List size={18} aria-hidden="true" /> Render activity <ChevronDown size={15} aria-hidden="true" /></summary>
       {events.length ? (
         <ol className="activity-list" tabIndex={0} aria-label="Recent render events">
           {events.slice().reverse().map((event, index) => (
@@ -38,11 +38,11 @@ function RenderActivity({ events = [], active }) {
           ))}
         </ol>
       ) : <p className="muted">Waiting for the first worker update.</p>}
-    </section>
+    </details>
   );
 }
 
-function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, gameplay }) {
+function ClipCard({ clip, index, ratio, onSave, onPreviewPlay, showScores, publishUrl, reel, gameplay }) {
   const [playing, setPlaying] = useState(false);
   const [copyState, setCopyState] = useState("");
   const [draft, setDraft] = useState(null);
@@ -54,15 +54,21 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
   const [editingCover, setEditingCover] = useState(false);
   const editId = useId();
   const video = useRef(null);
+  const editTrigger = useRef(null);
   const seek = useRef(0);
   const formattedRatio = ratio.replace(":", " / ");
   async function copy(titleOnly = false) {
     try {
       await navigator.clipboard.writeText(titleOnly ? clip.title : [clip.title, clip.description, clip.chapter_text].filter(Boolean).join("\n\n"));
-      setCopyState(titleOnly ? "Title copied" : "Copied");
+      setCopyState(titleOnly ? "Title copied." : "Post text copied.");
     } catch {
       setCopyState("Use the TXT download to copy the title and description.");
     }
+  }
+
+  function closeEditor() {
+    setDraft(null);
+    requestAnimationFrame(() => editTrigger.current?.focus());
   }
 
   function playChapter(time) {
@@ -81,7 +87,7 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
     try {
       const updated = await submit(clip.edit_url, draft);
       onSave(updated);
-      setDraft(null);
+      closeEditor();
       setCopyState("");
     } catch (error) {
       setEditError(Object.values(error.fields || {})[0]?.[0]?.message || error.message);
@@ -110,7 +116,7 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
     <article className="panel clip-card">
       <div className="clip-player" style={{ "--clip-ratio": formattedRatio }}>
         {playing ? (
-          <video ref={video} controls autoPlay playsInline preload="metadata" src={clip.video_url}
+          <video ref={video} onPlay={onPreviewPlay} controls autoPlay playsInline preload="metadata" src={clip.video_url}
             onLoadedMetadata={(event) => { if (seek.current) event.currentTarget.currentTime = seek.current; }}
             poster={clip.thumbnail_url} aria-label={clip.title} />
         ) : (
@@ -129,7 +135,7 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
         {draft ? (
           <form className="clip-editor" onSubmit={save}>
             <label htmlFor={`${editId}-title`}>Title</label>
-            <input id={`${editId}-title`} value={draft.title} required maxLength={100} disabled={saving || writing}
+            <input id={`${editId}-title`} value={draft.title} required maxLength={100} autoFocus disabled={saving || writing}
               onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
             <label htmlFor={`${editId}-description`}>Description</label>
             <textarea id={`${editId}-description`} value={draft.description} required maxLength={1200} rows={5} disabled={saving || writing}
@@ -149,7 +155,7 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
             {editError && <p className="field-error" role="alert">{editError}</p>}
             <div className="clip-actions">
               <button className="primary-button" disabled={saving || writing}>{saving ? "Saving…" : "Save"}</button>
-              <button className="secondary-button" type="button" disabled={saving || writing} onClick={() => setDraft(null)}>Cancel</button>
+              <button className="secondary-button" type="button" disabled={saving || writing} onClick={closeEditor}>Cancel</button>
             </div>
           </form>
         ) : (
@@ -165,41 +171,38 @@ function ClipCard({ clip, index, ratio, onSave, showScores, publishUrl, reel, ga
                 </button></li>
               ))}</ol>
             </details>}
-            <div className="clip-actions">
-              <button className="secondary-button" type="button" onClick={() => {
-                setDraft({ title: clip.title, description: clip.description });
-                setEditError("");
-                setDraftModel("");
-              }}><Pencil size={16} aria-hidden="true" /> Edit</button>
-              <button className="secondary-button" type="button" onClick={() => copy(true)}>
-                {copyState === "Title copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
-                {copyState === "Title copied" ? "Title copied" : "Copy title"}
-              </button>
-              <button className="secondary-button" type="button" onClick={() => copy()}>
-                {copyState === "Copied" ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
-                {copyState === "Copied" ? "Copied" : "Copy text"}
-              </button>
+            <div className="clip-actions clip-key-actions">
+              <Link className="secondary-button clip-publish" href={publishUrl} aria-label={`Publish ${clip.title}`}>
+                <Send size={16} aria-hidden="true" /> Publish
+              </Link>
               <a className="secondary-button" href={`${clip.video_url}?download=1`} aria-label={`Download MP4 for ${clip.title}`}>
                 <Download size={16} aria-hidden="true" /> MP4
               </a>
-              <Link className="secondary-button" href={publishUrl} aria-label={`Publish ${clip.title}`}>
-                <Send size={16} aria-hidden="true" /> Publish
-              </Link>
-              <a className="secondary-button" href={clip.text_url}><FileText size={16} aria-hidden="true" /> TXT</a>
-              {clip.thumbnail_editor_url && <button className="secondary-button" type="button" onClick={() => setEditingCover(true)}>
-                <ImageIcon size={16} aria-hidden="true" /> Edit thumbnail
-              </button>}
-              <a className="secondary-button" href={`${clip.thumbnail_url}${clip.thumbnail_url.includes("?") ? "&" : "?"}download=1`}
-                aria-label={`Download thumbnail for ${clip.title}`}>
-                <ImageIcon size={16} aria-hidden="true" /> JPG
-              </a>
-              {clip.captions_url && <a className="secondary-button" href={clip.captions_url} aria-label={`Download captions for ${clip.title}`}>
-                <Captions size={16} aria-hidden="true" /> SRT
-              </a>}
+              <button ref={editTrigger} className="secondary-button" type="button" onClick={() => {
+                setDraft({ title: clip.title, description: clip.description });
+                setEditError("");
+                setDraftModel("");
+              }}><Pencil size={16} aria-hidden="true" /> Edit text</button>
             </div>
+            <details className="clip-tools">
+              <summary><Ellipsis size={17} aria-hidden="true" /> More clip actions <ChevronDown size={15} aria-hidden="true" /></summary>
+              <div className="clip-actions">
+                {clip.thumbnail_editor_url && <button className="secondary-button" type="button" onClick={() => setEditingCover(true)}>
+                  <ImageIcon size={16} aria-hidden="true" /> Edit thumbnail
+                </button>}
+                <button className="secondary-button" type="button" onClick={() => copy(true)}><Copy size={16} aria-hidden="true" /> Copy title</button>
+                <button className="secondary-button" type="button" onClick={() => copy()}><Copy size={16} aria-hidden="true" /> Copy post text</button>
+                <a className="secondary-button" href={clip.text_url} aria-label={`Download post text for ${clip.title}`}>
+                  <FileText size={16} aria-hidden="true" /> TXT</a>
+                <a className="secondary-button" href={`${clip.thumbnail_url}${clip.thumbnail_url.includes("?") ? "&" : "?"}download=1`}
+                  aria-label={`Download thumbnail for ${clip.title}`}><ImageIcon size={16} aria-hidden="true" /> JPG</a>
+                {clip.captions_url && <a className="secondary-button" href={clip.captions_url} aria-label={`Download captions for ${clip.title}`}>
+                  <Captions size={16} aria-hidden="true" /> SRT</a>}
+              </div>
+            </details>
           </>
         )}
-        <span className="sr-only" aria-live="polite">{copyState}</span>
+        <p className="clip-copy-feedback" role="status">{copyState}</p>
       </div>
       {editingCover && <ThumbnailEditor clip={clip} index={index} ratio={ratio} onSave={onSave}
         onClose={() => setEditingCover(false)} />}
@@ -211,8 +214,14 @@ export default function RenderDetails({ id }) {
   const { preferences, loading: preferencesLoading } = usePreferences();
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
-  const [retrying, setRetrying] = useState(false);
+  const [renderAction, setRenderAction] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const recentPreview = useRef(null);
+
+  function playPreview(event) {
+    if (recentPreview.current !== event.currentTarget) recentPreview.current?.pause();
+    recentPreview.current = event.currentTarget;
+  }
 
   useEffect(() => {
     const abort = new AbortController();
@@ -234,17 +243,18 @@ export default function RenderDetails({ id }) {
     return () => { abort.abort(); clearTimeout(timer); };
   }, [id, refresh]);
 
-  async function retry() {
-    setRetrying(true);
+  async function changeRender(action) {
+    if (action === "cancel" && !window.confirm("Cancel this render? You can run it again from the Library.")) return;
+    setRenderAction(action);
     try {
-      const data = await submit(`jobs/${id}/retry/`, {});
+      const data = await submit(`jobs/${id}/${action}/`, {});
       setJob(data);
       setError("");
       setRefresh((value) => value + 1);
     } catch (failure) {
       setError(failure.message);
     } finally {
-      setRetrying(false);
+      setRenderAction("");
     }
   }
 
@@ -258,6 +268,9 @@ export default function RenderDetails({ id }) {
 
   const complete = job.status === "complete";
   const failed = job.status === "failed";
+  const cancelled = job.status === "cancelled";
+  const deleting = job.status === "deleting";
+  const canCancel = job.status === "queued" || job.status === "running";
   const reel = job.studio_mode === "highlights";
   const gameplay = job.editing_style === "gameplay";
   const byScore = job.selection_mode === "score";
@@ -266,7 +279,7 @@ export default function RenderDetails({ id }) {
   const countLabel = `${count} ${count === 1 ? "clip" : "clips"}`;
   const selection = reel ? `Highlights · up to ${job.highlight_minutes} min` :
     byScore ? `${gameplay ? "Activity" : "Viral"} score ${job.min_viral_score}+` : `Up to ${countLabel}`;
-  const activeStage = stages.findIndex(([key]) => key === job.stage);
+  const activeStage = stages.findIndex(([key]) => key === (job.stage === "covers" ? "export" : job.stage));
   const sourceStages = job.source_type === "upload"
     ? [["download", "Read uploaded video"], ...stages.slice(1)] : stages;
   const renderStages = reel ? sourceStages.map(([key, label]) => [key, {
@@ -280,7 +293,7 @@ export default function RenderDetails({ id }) {
           <div className="render-title">
             <span className="heading-icon">{complete ? <Archive size={23} aria-hidden="true" /> : <Clapperboard size={23} aria-hidden="true" />}</span>
             <div>
-              <h1>{failed ? "Render failed" : noMatches ? "No clips met your score" :
+              <h1>{cancelled ? "Render cancelled" : deleting ? "Cleanup incomplete" : failed ? "Render failed" : noMatches ? "No clips met your score" :
                 complete ? reel ? "Your highlight reel is ready" : "Your clips are ready" :
                 reel ? "Creating your highlight reel" : "Creating your clips"}</h1>
               <p>{complete ? reel ? `${formatTime(job.clips[0]?.end_time || 0)} runtime` : countLabel : selection} · {job.aspect_ratio} · {job.source_name || `${job.quality}p`}{!reel && job.editing_style && ` · ${editingStyles[job.editing_style]?.[0]}`}</p>
@@ -288,52 +301,70 @@ export default function RenderDetails({ id }) {
           </div>
           {noMatches ? <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link> :
             complete ? <a className="primary-button" href={job.archive_url}><Download size={18} aria-hidden="true" /> Download ZIP</a> :
-            <span className={`status ${job.status}`}>{statusLabels[job.status]}</span>}
+            <div className="render-result-actions">
+              <span className={`status ${job.status}`}>{statusLabels[job.status]}</span>
+              {canCancel && <button className="secondary-button" type="button" disabled={Boolean(renderAction)}
+                onClick={() => changeRender("cancel")}>Cancel render</button>}
+            </div>}
         </div>
         {error && <p className="field-error" role="alert">{error}</p>}
-        {failed ? (
-          <div className="failure-box">
-            <AlertCircle size={21} aria-hidden="true" />
-            <p>{job.error}</p>
-            <button className="secondary-button" type="button" onClick={retry} disabled={retrying}>
-              <RotateCcw size={16} aria-hidden="true" /> {retrying ? "Queuing…" : "Retry render"}
+        {failed || cancelled ? (
+          <div className={failed ? "failure-box" : "render-cancelled"}>
+            {failed && <AlertCircle size={21} aria-hidden="true" />}
+            <p>{failed ? job.error : job.activity}</p>
+            <button className="secondary-button" type="button" onClick={() => changeRender("retry")} disabled={Boolean(renderAction)}>
+              <RotateCcw size={16} aria-hidden="true" /> {renderAction === "retry" ? "Queuing…" : cancelled ? "Run again" : "Retry render"}
             </button>
           </div>
-        ) : !complete ? (
+        ) : deleting ? <Link className="secondary-button" href="/library?status=deleting">Open Library cleanup</Link> : !complete ? (
           <div className="render-progress">
             <div className="progress-label" role="status">
               <span>{job.activity || (job.status === "queued" ? "Waiting for the render worker" : activeLabel || "Starting render")}</span>
               <strong title="Estimated overall progress">{job.progress}%</strong>
             </div>
             <progress max={100} value={job.progress} aria-label="Estimated overall render progress" />
+            {job.status === "running" && job.stage === "covers" && <div className="render-cover-action">
+              <button type="button" className="secondary-button" disabled={Boolean(renderAction) || job.skip_ai_covers}
+                onClick={() => changeRender("skip-ai-covers")}>
+                {job.skip_ai_covers ? "Skipping remaining AI covers…" : "Skip remaining AI covers"}
+              </button>
+              <small>Finish the ZIP with frame covers for the remaining clips.</small>
+            </div>}
             <ol className="stage-list">
               {renderStages.map(([key, label], index) => (
-                <li key={key} className={index < activeStage ? "done" : index === activeStage ? "active" : ""}>
+                <li key={key} aria-current={index === activeStage ? "step" : undefined}
+                  className={index < activeStage ? "done" : index === activeStage ? "active" : ""}>
                   {index < activeStage ? <Check size={15} aria-hidden="true" /> :
                     index === activeStage ? <LoaderCircle size={15} className="spin" aria-hidden="true" /> : <span className="stage-dot" aria-hidden="true" />}
                   {label}
                 </li>
               ))}
             </ol>
-            <p className="muted">You can close this page while the worker finishes. Find the result in the Library.</p>
+            <p className="muted">{job.status === "cancelling" ? "The current operation may take a moment to stop." :
+              "You can close this page while the worker finishes. Find the result in the Library."}</p>
           </div>
         ) : noMatches ? (
           <p className="muted">No highlight reached {job.min_viral_score}{gameplay ? " on the activity score" : ""}. A lower minimum may return more clips.</p>
-        ) : !byScore && count < job.clip_count ? (
+        ) : !reel && !byScore && count < job.clip_count ? (
           <p className="muted">This render produced {count} of the {job.clip_count} requested clips.</p>
         ) : null}
-        <RenderActivity events={job.events} active={!complete && !failed} />
+        <RenderActivity events={job.events} active={!terminal.has(job.status)} failed={failed} />
       </section>
       {complete && !noMatches && (
         <section className="render-results" aria-labelledby="clip-list-title">
           <div className="section-heading">
             <h2 id="clip-list-title"><Film size={20} aria-hidden="true" /> {reel ? "Review highlight reel" : "Review clips"}</h2>
-            <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link>
+            <div className="render-result-actions">
+              {count > 1 && <Link className="secondary-button" href={`/publish?job=${job.id}&mode=bulk`}>
+                <Send size={16} aria-hidden="true" /> Bulk post
+              </Link>}
+              <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link>
+            </div>
           </div>
           <div className={reel ? "reel-result" : "clip-grid"}>
             {job.clips.map((clip, index) => <ClipCard key={clip.video_url} reel={reel} gameplay={gameplay} clip={clip} index={index} ratio={job.aspect_ratio}
               publishUrl={`/publish?job=${job.id}&clip=${index}`}
-              onSave={setJob} showScores={!preferencesLoading && preferences.show_scores} />)}
+              onSave={setJob} onPreviewPlay={playPreview} showScores={!preferencesLoading && preferences.show_scores} />)}
           </div>
         </section>
       )}

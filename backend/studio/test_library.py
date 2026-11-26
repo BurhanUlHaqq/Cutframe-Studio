@@ -107,3 +107,23 @@ class RenderLibraryTests(TestCase):
         self.assertEqual(self.client.post(reverse("retry", args=[old.id]), {}, content_type="application/json").status_code, 409)
         self.assertEqual(self.remove(old)["removed"][0]["bytes_freed"], 40)
         self.assertFalse(path.exists())
+
+    def test_work_cleanup_keeps_exports_and_pending_publications(self):
+        ready = self.render("finished.mp4")
+        pending = self.publish(ready, Publication.Status.QUEUED)
+        work = self.write(ready, "work/source.mp4", 200)
+        upload = self.write(ready, "input/source", 20)
+        export = self.write(ready, "files/clip-01.mp4", 40)
+        archive = self.write(ready, "clips-fixture.zip", 10)
+        running = self.render("running.mp4", Job.Status.RUNNING)
+        active_source = self.write(running, "work/source.mp4", 55)
+        listed = self.client.get(self.list_url).json()["renders"]
+        self.assertEqual(next(row for row in listed if row["id"] == str(ready.id))["work_bytes"], 200)
+        response = self.client.post(reverse("clear_render_work"), {"ids": [str(ready.id), str(running.id)]},
+                                    content_type="application/json")
+        self.assertEqual(response.json()["removed"], [{"id": str(ready.id), "bytes_freed": 200}])
+        self.assertEqual(response.json()["blocked"][0]["id"], str(running.id))
+        self.assertFalse(work.exists())
+        self.assertTrue(all(path.exists() for path in (upload, export, archive, active_source)))
+        self.assertTrue(Job.objects.filter(pk=ready.id, status=Job.Status.COMPLETE).exists())
+        self.assertTrue(Publication.objects.filter(pk=pending.id, job_id=ready.id, status=Publication.Status.QUEUED).exists())

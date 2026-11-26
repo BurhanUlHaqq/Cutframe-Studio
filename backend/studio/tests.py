@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from unittest import skipUnless
 from unittest.mock import Mock, patch
+from uuid import uuid4
 from zipfile import ZipFile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -45,6 +46,23 @@ class StudioTests(TestCase):
         self.assertEqual(other.get(reverse("jobs")).json()["jobs"], [])
         for action in ("detail", "archive"):
             self.assertEqual(other.get(reverse(action, args=[job["id"]])).status_code, 404)
+
+    def test_publish_browser_lists_older_finished_renders_with_clips_only(self):
+        self.client.get(reverse("session"))
+        owner = self.client.session["studio_owner"]
+        options = {"owner": owner, "clip_count": 1, "aspect_ratio": "9:16", "quality": "720"}
+        ready = Job.objects.create(**options, source_name="Older video.mp4", status=Job.Status.COMPLETE,
+                                   clips=[{"title": "Ready to publish"}])
+        Job.objects.bulk_create([Job(**options, source_name=f"Queued {index}.mp4") for index in range(50)])
+        Job.objects.create(**options, status=Job.Status.COMPLETE)
+        Job.objects.create(**(options | {"owner": uuid4()}), status=Job.Status.COMPLETE, clips=[{"title": "Private clip"}])
+
+        endpoint = reverse("jobs")
+        self.assertNotIn(str(ready.id), [job["id"] for job in self.client.get(endpoint).json()["jobs"]])
+        published = self.client.get(endpoint, {"finished": "1"}).json()["jobs"]
+        self.assertEqual([job["id"] for job in published], [str(ready.id)])
+        self.assertEqual(published[0]["clips"][0]["title"], "Ready to publish")
+        self.assertEqual(Client().get(endpoint, {"finished": "1"}).json()["jobs"], [])
 
     def test_rejects_files_playlists_and_lookalike_hosts(self):
         for url in (

@@ -66,6 +66,8 @@ export const stages = [
 export const statusLabels = {
   queued: "Queued",
   running: "Processing",
+  cancelling: "Stopping",
+  cancelled: "Cancelled",
   complete: "Ready",
   failed: "Failed",
   deleting: "Cleanup incomplete",

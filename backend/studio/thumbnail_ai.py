@@ -25,12 +25,14 @@ OPENAI_IMAGE_MODELS = (
     "gpt-image-1-mini", "gpt-image-1.5", "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
     "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
 )
-DEFAULTS = {"provider": "", "model": "", "base_url": "", "quality": "medium", "automatic": True}
+DEFAULTS = {"provider": "", "model": "", "base_url": "", "quality": "medium", "automatic": True, "automatic_limit": None}
 MAX_RESPONSE = 24 * 1024**2
 
 
 class ThumbnailGenerationError(ValueError):
-    pass
+    def __init__(self, message, *, stop_batch=False):
+        super().__init__(message)
+        self.stop_batch = stop_batch
 
 
 class ThumbnailAISettingsForm(forms.Form):
@@ -42,6 +44,7 @@ class ThumbnailAISettingsForm(forms.Form):
     remove_key = forms.BooleanField(required=False)
     quality = forms.ChoiceField(choices=[(value, value) for value in ("low", "medium", "high")])
     automatic = forms.BooleanField(required=False)
+    automatic_limit = forms.IntegerField(min_value=1, required=False)
 
     def clean(self):
         data = super().clean()
@@ -147,9 +150,11 @@ def _request_art(provider, prompt, ratio, reference):
 def _image_payload(client, url, headers, **payload):
     with client.stream("POST", url, headers=headers, **payload) as response:
         if response.status_code in (401, 403):
-            raise ThumbnailGenerationError("The image provider rejected the key or model access.")
+            raise ThumbnailGenerationError("The image provider rejected the key or model access.", stop_batch=True)
+        if response.status_code == 404:
+            raise ThumbnailGenerationError("The selected image model or endpoint was unavailable.", stop_batch=True)
         if response.status_code == 429:
-            raise ThumbnailGenerationError("The image provider returned a rate or quota limit.")
+            raise ThumbnailGenerationError("The image provider returned a rate or quota limit.", stop_batch=True)
         if not response.is_success:
             raise ThumbnailGenerationError(f"The image provider rejected the request (HTTP {response.status_code}).")
         output = bytearray()
@@ -185,6 +190,8 @@ def make_ai_cover(provider, clip, ratio, work, *, reference=None, direction=""):
                                     placement=design.get("placement", "bottom"))
             except CoverDesignError:
                 return output.read_bytes()
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        raise ThumbnailGenerationError("Cutframe could not connect to the image provider.", stop_batch=True) from exc
     except httpx.HTTPError as exc:
         raise ThumbnailGenerationError("The image provider could not finish the request in time. Check the connection.") from exc
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError) as exc:

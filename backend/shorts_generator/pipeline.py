@@ -117,9 +117,13 @@ def generate_shorts(
     else:
         report("rank", 56, f"Analyzing the transcript with {PROVIDERS[ranking.provider][0]}")
         with ranking_client(ranking) as rank:
+            def rank_at_checkpoint(prompt):
+                report("rank", 56, "")
+                return rank(prompt)
+
             highlights_result = get_highlights(
-                transcript, num_clips=num_clips, llm_fn=rank, clip_length=clip_length, min_viral_score=min_viral_score,
-                editing_style=editing_style,
+                transcript, num_clips=num_clips, llm_fn=rank_at_checkpoint, clip_length=clip_length,
+                min_viral_score=min_viral_score, editing_style=editing_style,
                 on_section=lambda index, total: report(
                     "rank", 58 + 10 * (index - 1) // total,
                     "Finding highlights" if total == 1 else f"Finding highlights · transcript section {index} of {total}",

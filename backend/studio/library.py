@@ -23,7 +23,7 @@ from .models import Job, StudioMode
 
 logger = logging.getLogger(__name__)
 PAGE_SIZE = 12
-REMOVABLE = (Job.Status.COMPLETE, Job.Status.FAILED, Job.Status.DELETING)
+REMOVABLE = (Job.Status.COMPLETE, Job.Status.FAILED, Job.Status.CANCELLED, Job.Status.DELETING)
 PUBLISHING_REASON = "This render has a scheduled or active publication. Cancel it or wait for it to finish."
 
 
@@ -61,6 +61,7 @@ def summarize(job, bytes_used, publishing):
         "source": job.source_name or f"YouTube · {job.video_id}", "studio_mode": job.studio_mode,
         "status": library_status(job), "created_at": job.created_at, "progress": job.progress,
         "clip_count": len(job.clips), "bytes": bytes_used, "editing_style": job.editing_style,
+        "work_bytes": render_bytes(job_directory(job.id) / "work") if job.status == Job.Status.COMPLETE else 0,
         "aspect_ratio": job.aspect_ratio, "thumbnail_url": thumbnail,
         "archive_url": reverse("archive", args=[job.id]) if ready else None, "delete_blocked": blocked,
     }
@@ -80,11 +81,11 @@ def library(request):
         rows = rows.filter(created_at__lt=timezone.now() - timedelta(days=int(age)))
     status = filters.get("status")
     if status == "active":
-        rows = rows.filter(status__in=(Job.Status.QUEUED, Job.Status.RUNNING))
+        rows = rows.filter(status__in=Job.ACTIVE)
     elif status in {"complete", "empty"}:
         rows = rows.filter(status=Job.Status.COMPLETE)
         rows = rows.exclude(clips=[]) if status == "complete" else rows.filter(clips=[])
-    elif status in (Job.Status.FAILED, Job.Status.DELETING):
+    elif status in (Job.Status.FAILED, Job.Status.CANCELLED, Job.Status.DELETING):
         rows = rows.filter(status=status)
 
     term = filters.get("q", "").strip()[:180].casefold()
@@ -116,7 +117,7 @@ def library(request):
                          "total": total, "page": page, "pages": pages})
 
 
-def remove_render(owner, job_id):
+def remove_render(owner, job_id, *, work_only=False):
     record = Job.objects.filter(pk=job_id, owner=owner)
     if not record.exists():
         return None, "This render is no longer available."
@@ -125,23 +126,28 @@ def remove_render(owner, job_id):
             status = record.values_list("status", flat=True).first()
             if status is None:
                 return None, "This render is no longer available."
-            if status not in REMOVABLE:
+            if work_only and status != Job.Status.COMPLETE:
+                return None, "Only completed renders can have their working files cleared."
+            if not work_only and status not in REMOVABLE:
                 return None, "Wait for this render to finish before deleting it."
-            if Publication.objects.filter(job_id=job_id, status__in=Publication.ACTIVE).exists():
+            if not work_only and Publication.objects.filter(job_id=job_id, status__in=Publication.ACTIVE).exists():
                 return None, PUBLISHING_REASON
             directory = job_directory(job_id)
+            target = directory / "work" if work_only else directory
             # Only remove the UUID directory inside Cutframe's jobs directory.
-            if directory.is_symlink() or directory.parent.is_symlink():
+            if directory.is_symlink() or directory.parent.is_symlink() or target.is_symlink():
                 return None, "Cutframe could not verify the render's storage location."
-            record.update(status=Job.Status.DELETING, updated_at=timezone.now())
-            size = render_bytes(directory)
+            if not work_only:
+                record.update(status=Job.Status.DELETING, updated_at=timezone.now())
+            size = render_bytes(target)
             try:
-                if directory.exists():
-                    shutil.rmtree(directory)
+                if target.exists():
+                    shutil.rmtree(target)
             except OSError as exc:
                 logger.warning("Render cleanup failed for %s (%s)", job_id, type(exc).__name__)
                 return None, "Some files could not be removed. Close any open downloads and try again."
-            record.delete()
+            if not work_only:
+                record.delete()
     except Timeout:
         return None, "This render is in use. Wait for its current operation to finish and try again."
     return size, ""
@@ -149,7 +155,7 @@ def remove_render(owner, job_id):
 
 @require_POST
 @never_cache
-def delete_renders(request):
+def delete_renders(request, *, work_only=False):
     if request.content_type != "application/json":
         return JsonResponse({"error": "Send the selection as JSON."}, status=415)
     try:
@@ -165,7 +171,7 @@ def delete_renders(request):
     removed, blocked = [], []
     owner = request.session.get("studio_owner")
     for job_id in ids:
-        size, reason = remove_render(owner, job_id)
+        size, reason = remove_render(owner, job_id, work_only=work_only)
         if reason:
             blocked.append({"id": str(job_id), "reason": reason})
         else:

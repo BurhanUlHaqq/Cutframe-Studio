@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { ChevronDown, Clapperboard, LibraryBig, Plus, Scissors, Send, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, Clapperboard, LibraryBig, Plus, Scissors, Send, Settings } from "lucide-react";
 import { settingsSections, useSettingsSection } from "./settings/sections";
 
 export default function Shell({ children }) {
@@ -19,6 +19,7 @@ export default function Shell({ children }) {
   const SettingsLink = onSettings ? "a" : Link;
   return (
     <div className="shell" data-settings-open={showSettings}>
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <aside className="sidebar">
         <Link href="/" className="brand" aria-label="Cutframe Studio home">
           <span className="brand-mark"><Scissors size={21} strokeWidth={2.3} aria-hidden="true" /></span>
@@ -61,11 +62,13 @@ export default function Shell({ children }) {
         <div className="sidebar-footer"><Clapperboard size={17} aria-hidden="true" /> Local workspace</div>
       </aside>
       <div className="workspace">
-        <header className="topbar">
-          <span>{onStudio ? "Studio" : onSettings ? "Settings" : onPublish ? "Publish Studio" : onLibrary ? "Library" : "Render details"}</span>
-          <span className="topbar-brand">Cutframe Studio</span>
-        </header>
-        <main id="main-content" className="content">{children}</main>
+        <main id="main-content" className="content" tabIndex={-1}>
+          {onRender && <nav className="workspace-breadcrumb" aria-label="Breadcrumb">
+            <Link href="/library"><LibraryBig size={16} aria-hidden="true" /> Library</Link>
+            <ChevronRight size={15} aria-hidden="true" /><span aria-current="page">Render details</span>
+          </nav>}
+          {children}
+        </main>
       </div>
     </div>
   );

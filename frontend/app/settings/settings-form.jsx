@@ -73,6 +73,7 @@ function PreferencesPanel({ section, description, children }) {
               <div className="settings-feedback">
                 {saveError && <p className="field-error" role="alert">{saveError}</p>}
                 <p className="settings-saved" role="status">{saved && <><Check size={17} aria-hidden="true" /> Preferences saved</>}</p>
+                {changed && !saving && !saveError && <small className="muted">Unsaved changes</small>}
               </div>
               <div className="settings-buttons">
                 <button type="button" className="secondary-button" disabled={saving || !custom}
@@ -92,18 +93,22 @@ function PreferencesPanel({ section, description, children }) {
 
 export default function SettingsForm() {
   const active = useSettingsSection();
+  const [visited, setVisited] = useState(() => new Set([active]));
   const { render, models, descriptions, thumbnails, publishing, storage, appearance } = settingsSections;
+  const opened = (section) => active === section || visited.has(section);
 
   useEffect(() => {
-    if (window.location.hash !== `#${active.id}`) return;
-    window.scrollTo(0, 0);
-    document.getElementById(active.id)?.focus({ preventScroll: true });
-  }, [active.id]);
+    setVisited((previous) => previous.has(active) ? previous : new Set([...previous, active]));
+    if (window.location.hash === `#${active.id}`) {
+      window.scrollTo(0, 0);
+      document.getElementById(active.id)?.focus({ preventScroll: true });
+    }
+  }, [active]);
 
   return (
     <section className="settings-page" aria-labelledby="settings-title">
-      <header className="settings-title">
-        <h1 id="settings-title">Settings</h1>
+      <header className="page-heading">
+        <div><h1 id="settings-title">Settings</h1><p>Manage render defaults, AI models, and publishing connections.</p></div>
       </header>
       <nav className="settings-sections" aria-label="Settings sections">
         {Object.values(settingsSections).map(({ id, label, Icon }) => (
@@ -112,7 +117,7 @@ export default function SettingsForm() {
           </a>
         ))}
       </nav>
-      <div hidden={active !== render}>
+      {opened(render) && <div hidden={active !== render}>
         <PreferencesPanel section={render} description="Starting options for every new render.">
           {(values, change) => <>
             <SelectField label="Default studio mode" value={values.studio_mode} choices={studioModes}
@@ -126,21 +131,21 @@ export default function SettingsForm() {
             </section>
           </>}
         </PreferencesPanel>
-      </div>
-      <div hidden={active !== models}>
+      </div>}
+      {opened(models) && <div hidden={active !== models}>
         <AISettings />
-      </div>
-      {active === descriptions && <DescriptionSettings />}
-      <div hidden={active !== thumbnails}>
+      </div>}
+      {opened(descriptions) && <div hidden={active !== descriptions}><DescriptionSettings /></div>}
+      {opened(thumbnails) && <div hidden={active !== thumbnails}>
         <ThumbnailAISettings />
-      </div>
-      <div hidden={active !== publishing}>
+      </div>}
+      {opened(publishing) && <div hidden={active !== publishing}>
         <PublishingSettings />
-      </div>
-      <div hidden={active !== storage}>
+      </div>}
+      {opened(storage) && <div hidden={active !== storage}>
         <StorageSettings />
-      </div>
-      <div hidden={active !== appearance}>
+      </div>}
+      {opened(appearance) && <div hidden={active !== appearance}>
         <PreferencesPanel section={appearance} description="Display preferences for this browser.">
           {(values, change) => (
             <>
@@ -154,7 +159,7 @@ export default function SettingsForm() {
             </>
           )}
         </PreferencesPanel>
-      </div>
+      </div>}
     </section>
   );
 }

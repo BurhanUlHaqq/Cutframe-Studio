@@ -5,8 +5,16 @@ Open [Settings → Publishing](http://localhost:5031/settings#publishing-setting
 | Platform | Recommended connection | Publishing behavior |
 | --- | --- | --- |
 | YouTube | Google OAuth **Web application** client with the localhost redirect | Uploads directly. Private is the default. |
-| TikTok | Login Kit for Web and an approved Content Posting API app with a stable public HTTPS redirect | Sends a draft to the TikTok inbox. Finish posting in TikTok. |
+| TikTok | Browser sign-in for TikTok Studio, or Login Kit for Web and an approved Content Posting API app for inbox drafts | Post from TikTok Studio, or queue an inbox draft to finish in TikTok. |
 | Instagram Reels | Facebook Login for Business with a stable public HTTPS redirect and a linked professional Instagram account | Publishes Reels directly to the selected account. |
+
+## Publish to TikTok in your browser
+
+1. Open [Publish → TikTok Studio](http://localhost:5031/publish?mode=tiktok) and select a finished clip. Edit its caption if needed, then choose **Copy caption** and **Download MP4**.
+2. Choose **Open TikTok Studio**. The upload page opens in another tab in the same browser. If TikTok asks you to sign in, sign in there with the account you want to post from.
+3. Upload the MP4, paste the caption, and check the cover and visibility in TikTok Studio before posting.
+
+This option works with the local Docker setup using your normal TikTok sign-in. Cutframe’s Queue tracks transfers made through the Content Posting API. [TikTok Studio on desktop](https://newsroom.tiktok.com/helping-creators-bring-creativity-to-life-with-tiktok-studio?lang=en)
 
 ## Get your developer credentials
 
@@ -77,13 +85,13 @@ For a local Windows installation, use a **named Cloudflare Tunnel** with a dedic
 
 A stable hostname keeps the registered redirect valid across restarts. Quick tunnel addresses change. If you already have a public HTTPS reverse proxy, apply the same path-only routing and pass `Host: localhost` to Django. If you only need YouTube, the localhost workflow is sufficient. [Cloudflare origin Host header](https://developers.cloudflare.com/tunnel/reference/origin-parameters/#httphostheader) · [Cloudflare Quick Tunnel behavior](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
 
-### TikTok
+### TikTok inbox drafts
 
 1. In [Manage apps](https://developers.tiktok.com/portal/apps), select **Connect an app** or open an existing app. Add **Login Kit** with Web enabled and **Content Posting API**. Request `user.info.basic` and `video.upload`. [TikTok app registration and credential location](https://developers.tiktok.com/docs/en/getting-started-create-an-app)
 2. Register the HTTPS redirect from the TikTok card in Login Kit. It ends in `/api/publishing/callback/tiktok/`. Under **App details → Credentials**, copy the **Client key** and **Client secret** from the same app and environment. Keep sandbox credentials paired with the sandbox configuration and target user.
 3. In **Publish → Accounts**, connect your creator account and grant the requested scopes. When a video reaches **Ready in TikTok**, open the notification to review the draft, choose its cover frame, set visibility, add the caption, and publish. Cutframe can copy the caption and check the draft status.
 
-TikTok's sandbox supports designated target users and limits public posting. Its app review rules exclude private or personal-only apps. If your installation has no approved TikTok developer app, use **Post manually** in Publish Studio. [TikTok Login Kit for Web](https://developers.tiktok.com/docs/en/login-kit-web) · [Inbox upload](https://developers.tiktok.com/docs/en/content-posting-api-get-started-upload-content) · [Sandbox](https://developers.tiktok.com/docs/en/add-a-sandbox) · [App review rules](https://developers.tiktok.com/docs/en/app-review-guidelines)
+TikTok's sandbox supports designated target users and limits public posting. Its app review rules exclude private or personal-only apps. For local posting with your browser sign-in, use **Publish → TikTok Studio**. [TikTok Login Kit for Web](https://developers.tiktok.com/docs/en/login-kit-web) · [Inbox upload](https://developers.tiktok.com/docs/en/content-posting-api-get-started-upload-content) · [Sandbox](https://developers.tiktok.com/docs/en/add-a-sandbox) · [App review rules](https://developers.tiktok.com/docs/en/app-review-guidelines)
 
 ### Instagram Reels
 
@@ -93,6 +101,18 @@ TikTok's sandbox supports designated target users and limits public posting. Its
 4. In the Meta App Dashboard, open **App settings → Basic**. Copy **App ID** and select **Show** beside **App secret**. Save both in **Settings → Publishing**. Connect the Facebook account in **Publish → Accounts** and select the linked Instagram profile when preparing a reel. In development mode, use eligible app roles. Access for other users may require Meta approval. [Meta's app secret location](https://developers.facebook.com/docs/graph-api/guides/secure-requests/)
 
 Cutframe transfers the local MP4 through Meta's resumable upload endpoint and requests the selected thumbnail frame when a timestamp is recorded in the render. To use the designed JPG with its headline, download it and choose it when uploading manually in Instagram. Start with an account where you are ready for a live Reel. [Instagram API with Facebook Login](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-facebook-login/) · [Reels covers and `thumb_offset`](https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-user/media)
+
+## Find a clip to publish
+
+In **New post** or **Bulk post**, choose a source in **Renders**, then choose a video in **Clips**. Search by source name or clip title across finished renders. In **New post**, selecting a video opens its preview and fills in the post title and caption. Edits stay with that clip while you browse during the current session.
+
+## Queue several videos together
+
+Open **Publish → Bulk post**, or use **Bulk post** on a finished render. Select videos and connected destination accounts. Cutframe makes one queue entry for each video and account combination. Open a video under **Post text** to edit its title or caption before approving the batch. The saved cover and platform settings are applied through the same publishing workflow as a single post.
+
+Set **First send time** to schedule the batch. Add a **Schedule gap** to stagger videos in selection order. Posts for the same video share its scheduled time. A batch can contain up to 50 videos and 150 deliveries. TikTok transfers go to the inbox for you to finish, and the app checks that the batch schedules at most five TikTok drafts per account within any 24-hour window. TikTok also applies its own pending-draft limits to the account. [TikTok inbox upload and limits](https://developers.tiktok.com/docs/en/content-posting-api-reference-upload-video)
+
+After confirming the batch, the queue shows each delivery separately. Open **View batch** from the full queue to return to that batch. Both queue views show 20 posts per page and refresh the status of the current page. Use **Platform** and **Status** to narrow the list. **Needs attention** includes failed posts and posts whose outcome needs review on the platform. A validation failure leaves the batch unqueued so you can correct it and try again.
 
 ## Troubleshoot connection and publishing
 

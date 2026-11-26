@@ -121,6 +121,13 @@ export default function ThumbnailAISettings() {
                 onChange={(event) => change({ automatic: event.target.checked })} />
               <span>Automatically generate covers for new renders<small>Uses one image generation per finished video.</small></span>
             </label>}
+            {values.provider && values.automatic && <div className="thumbnail-cover-limit">
+              <label htmlFor="automatic-cover-limit">Maximum automatic covers per render</label>
+              <div className="input-wrap"><input id="automatic-cover-limit" type="number" min={1} step={1}
+                value={values.automatic_limit ?? ""} placeholder="Every video"
+                onChange={(event) => change({ automatic_limit: event.target.value === "" ? null : Number(event.target.value) })} /></div>
+              <small className="ai-help">Leave blank for every video. Videos beyond the limit use frame covers.</small>
+            </div>}
           </fieldset>
           <div className="settings-actions">
             <div className="settings-feedback">

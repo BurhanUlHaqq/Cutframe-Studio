@@ -144,7 +144,6 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
 
   return (
     <>
-      <EditingStylePicker value={style} onChange={(editing_style) => onChange({ editing_style })} />
       <div className="clip-selection">
         <SelectField label="Clip selection" value={selection_mode} choices={gameplay ? gameplaySelection : selectionModes}
           onChange={(next) => onChange({ selection_mode: next, min_viral_score: min_viral_score ?? 80 })} />
@@ -191,6 +190,7 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
           ))}
         </div>
       </fieldset>
+      <EditingStylePicker value={style} onChange={(editing_style) => onChange({ editing_style })} />
       <fieldset className="length-field">
         <legend>Clip length</legend>
         <div className="options length-options">

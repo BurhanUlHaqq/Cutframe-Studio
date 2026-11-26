@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Archive, CheckSquare, ChevronLeft, ChevronRight, Film, HardDrive, LibraryBig, Plus, Search, Trash2 } from "lucide-react";
+import { Archive, CheckSquare, ChevronLeft, ChevronRight, Eraser, Film, HardDrive, LibraryBig, Plus, Search, SlidersHorizontal, Trash2 } from "lucide-react";
 import { api, statusLabels, submit } from "../api";
 import { editingStyles, SelectField } from "../render-options";
 
@@ -12,11 +12,12 @@ const statuses = { ...statusLabels, complete: "Ready", empty: "No matches", dele
 const filters = {
   mode: [["", "All modes"], ["shorts", "Short Clips"], ["highlights", "Highlights"]],
   status: [["", "All statuses"], ["complete", "Ready"], ["active", "In progress"], ["failed", "Failed"],
-    ["empty", "No matches"], ["deleting", "Cleanup incomplete"]],
+    ["cancelled", "Cancelled"], ["empty", "No matches"], ["deleting", "Cleanup incomplete"]],
   age: [["", "Any date"], ["30", "Older than 30 days"], ["90", "Older than 90 days"], ["365", "Older than 1 year"]],
   sort: [["", "Newest first"], ["oldest", "Oldest first"], ["largest", "Largest first"]],
 };
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const quickStatuses = [["", "All"], ["complete", "Ready"], ["active", "In progress"], ["failed", "Failed"]];
 
 function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -25,11 +26,7 @@ function formatBytes(bytes) {
   return `${amount.toLocaleString(undefined, { maximumFractionDigits: unit && amount < 100 ? 1 : 0 })} ${units[unit]}`;
 }
 
-function deleteMessage(count, bytes) {
-  return `Deleted ${count} ${count === 1 ? "render" : "renders"} · ${formatBytes(bytes)} reclaimed`;
-}
-
-function DeleteDialog({ renders, onCancel, onDelete, busy, error }) {
+function CleanupDialog({ renders, workOnly, onCancel, onDelete, busy, error }) {
   const dialog = useRef(null);
   const title = useId();
   const description = useId();
@@ -38,33 +35,35 @@ function DeleteDialog({ renders, onCancel, onDelete, busy, error }) {
     element.showModal();
     return () => element.close();
   }, []);
-  const bytes = renders.reduce((total, render) => total + render.bytes, 0);
+  const size = (render) => workOnly ? render.work_bytes : render.bytes;
+  const bytes = renders.reduce((total, render) => total + size(render), 0);
   return (
     <dialog ref={dialog} className="library-dialog" aria-labelledby={title} aria-describedby={description}
       onCancel={(event) => { event.preventDefault(); if (!busy) onCancel(); }}>
-      <div className="library-delete-icon"><Trash2 size={22} aria-hidden="true" /></div>
-      <h2 id={title}>Delete {renders.length === 1 ? "this render" : `${renders.length} renders`}?</h2>
-      <p id={description}>This permanently removes the local media, uploaded copies, and ZIP exports. Published videos stay on their platforms.</p>
+      <div className="library-delete-icon">{workOnly ? <Eraser size={22} aria-hidden="true" /> : <Trash2 size={22} aria-hidden="true" />}</div>
+      <h2 id={title}>{workOnly ? "Clear working files?" : `Delete ${renders.length === 1 ? "this render" : `${renders.length} renders`}?`}</h2>
+      <p id={description}>{workOnly ? "This removes temporary media and downloaded source copies used during rendering." :
+        "This permanently removes the local media, uploaded copies, and ZIP exports. Published videos stay on their platforms."}</p>
       <ul className="library-delete-items">
-        {renders.map((render) => <li key={render.id}><span>{render.title}</span><strong>{formatBytes(render.bytes)}</strong></li>)}
+        {renders.map((render) => <li key={render.id}><span>{render.title}</span><strong>{formatBytes(size(render))}</strong></li>)}
       </ul>
       {error && <p className="field-error" role="alert">{error}</p>}
       <div className="library-dialog-actions">
         <strong>{formatBytes(bytes)} to reclaim</strong>
         <button className="secondary-button" type="button" autoFocus disabled={busy} onClick={onCancel}>Cancel</button>
         <button className="danger-button" type="button" disabled={busy} onClick={onDelete}>
-          {busy ? "Deleting…" : renders.length === 1 ? "Delete render" : "Delete renders"}
+          {busy ? "Removing files…" : workOnly ? "Clear working files" : renders.length === 1 ? "Delete render" : "Delete renders"}
         </button>
       </div>
     </dialog>
   );
 }
 
-function LibraryRow({ render, selecting, selected, onSelect, onDelete }) {
+function LibraryRow({ render, selecting, selected, onSelect, onCleanup }) {
   const reel = render.studio_mode === "highlights";
   const title = render.title;
   const date = dateFormat.format(new Date(render.created_at));
-  const isActive = ["queued", "running"].includes(render.status);
+  const isActive = ["queued", "running", "cancelling"].includes(render.status);
   const isBlocked = Boolean(render.delete_blocked);
   const details = `/jobs/${render.id}`;
   return (
@@ -88,13 +87,18 @@ function LibraryRow({ render, selecting, selected, onSelect, onDelete }) {
           {statuses[render.status]}{render.status === "running" && ` ${render.progress}%`}
         </span>
         <strong>{formatBytes(render.bytes)}</strong>
+        {render.work_bytes > 0 && <small>{formatBytes(render.work_bytes)} working files</small>}
         {isBlocked && !isActive && <small>Publication pending</small>}
       </div>
       <div className="library-row-actions">
         {render.archive_url && <a href={render.archive_url} className="secondary-button" aria-label={`Download ZIP for ${title}`}>
           <Archive size={15} aria-hidden="true" /> ZIP</a>}
+        {!selecting && render.work_bytes > 0 && <button type="button" className="secondary-button" title="Clear working files"
+          aria-label={`Clear working files for ${title}`} onClick={() => onCleanup([render], true)}>
+          <Eraser size={17} aria-hidden="true" />
+        </button>}
         {!selecting && <button type="button" className="secondary-button library-delete-button" disabled={isBlocked}
-          title={render.delete_blocked || "Delete render"} aria-label={`Delete ${title}`} onClick={() => onDelete([render])}>
+          title={render.delete_blocked || "Delete render"} aria-label={`Delete ${title}`} onClick={() => onCleanup([render])}>
           <Trash2 size={17} aria-hidden="true" />
         </button>}
       </div>
@@ -106,6 +110,7 @@ export default function RenderLibrary() {
   const params = useSearchParams();
   const [draft, setDraft] = useState(params.get("q") || "");
   const [data, setData] = useState(null);
+  const [filtersOpen, setFiltersOpen] = useState(() => Boolean(params.get("age") || params.get("mode") || params.get("sort")));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [cleanupError, setCleanupError] = useState("");
@@ -117,11 +122,15 @@ export default function RenderLibrary() {
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const query = params.toString();
-  const hasFilters = ["q", "age", "mode", "status"].some((key) => params.get(key));
+  const status = params.get("status") || "";
+  const extraFilters = ["age", "mode", "sort"].filter((key) => params.get(key)).length +
+    Number(Boolean(status && !quickStatuses.some(([value]) => value === status)));
+  const hasFilters = Boolean(params.get("q") || status || extraFilters);
   const current = data?.query === query ? data : null;
   const renders = current?.renders ?? [];
   const deletable = renders.filter((render) => !render.delete_blocked);
   const checked = deletable.filter((render) => selected.includes(render.id));
+  const workSelection = checked.filter((render) => render.work_bytes > 0);
   const pageBytes = renders.reduce((total, render) => total + render.bytes, 0);
 
   useEffect(() => { setDraft(params.get("q") || ""); }, [query, params]);
@@ -136,7 +145,7 @@ export default function RenderLibrary() {
         if (controller.signal.aborted) return;
         setData({ ...result, query });
         setError("");
-        if (result.renders.some((render) => ["queued", "running"].includes(render.status))) {
+        if (result.renders.some((render) => ["queued", "running", "cancelling"].includes(render.status))) {
           timer = setTimeout(() => load(true), 6000);
         }
       } catch (failure) {
@@ -162,9 +171,9 @@ export default function RenderLibrary() {
     window.history.pushState(null, "", `/library${search ? `?${search}` : ""}`);
   }
 
-  function openDelete(values) {
+  function openCleanup(renders, workOnly = false) {
     setDeleteError("");
-    setConfirmation(values);
+    setConfirmation({ renders, workOnly });
   }
 
   async function remove() {
@@ -172,14 +181,18 @@ export default function RenderLibrary() {
     setDeleting(true);
     setDeleteError("");
     try {
-      const result = await submit("library/delete/", { ids: confirmation.map((render) => render.id) });
+      const { renders, workOnly } = confirmation;
+      const result = await submit(workOnly ? "library/clear-work/" : "library/delete/", { ids: renders.map((render) => render.id) });
       const { removed, blocked } = result;
-      const ids = new Set(removed.map(({ id }) => id));
+      const removedBytes = new Map(removed.map(({ id, bytes_freed }) => [id, bytes_freed]));
       const bytes = removed.reduce((total, item) => total + item.bytes_freed, 0);
       setSelected([]);
-      setData((previous) => ({ ...previous, renders: previous.renders.filter((render) => !ids.has(render.id)) }));
-      setNotice(removed.length ? deleteMessage(removed.length, bytes) : "");
-      setCleanupError(blocked.map(({ id, reason }) => `${confirmation.find((render) => render.id === id)?.title || "Render"} · ${reason}`).join(" "));
+      setData((previous) => ({ ...previous, renders: workOnly ? previous.renders.map((render) => removedBytes.has(render.id) ?
+        { ...render, work_bytes: 0, bytes: Math.max(0, render.bytes - removedBytes.get(render.id)) } : render) :
+        previous.renders.filter((render) => !removedBytes.has(render.id)) }));
+      setNotice(removed.length ? `${workOnly ? "Working files cleared" :
+        `Deleted ${removed.length} ${removed.length === 1 ? "render" : "renders"}`} · ${formatBytes(bytes)} reclaimed` : "");
+      setCleanupError(blocked.map(({ id, reason }) => `${renders.find((render) => render.id === id)?.title || "Render"} · ${reason}`).join(" "));
       setConfirmation(null);
       setAttempt((value) => value + 1);
     } catch (failure) {
@@ -191,21 +204,31 @@ export default function RenderLibrary() {
 
   return (
     <section className="render-library" aria-labelledby="library-title">
-      <header className="library-heading">
-        <div><h1 id="library-title">Library</h1><p>Find, download, and clear out your renders.</p></div>
+      <header className="page-heading">
+        <div><h1 id="library-title">Library</h1><p>Find finished clips, check render progress, and manage storage.</p></div>
         <Link className="primary-button" href="/"><Plus size={18} aria-hidden="true" /> New render</Link>
       </header>
       <div className="panel library-panel">
         <div className="library-tools">
-          <form className="library-search" role="search" onSubmit={(event) => {
-            event.preventDefault(); navigate({ q: draft.trim() });
-          }}>
-            <div className="input-wrap"><Search size={17} aria-hidden="true" />
-              <input type="search" aria-label="Search renders by title or source" maxLength={180} placeholder="Search renders" value={draft}
-                onChange={(event) => setDraft(event.target.value)} /></div>
-            <button type="submit" className="secondary-button">Search</button>
-          </form>
-          <div className="library-filters">
+          <div className="library-toolbar">
+            <form className="library-search" role="search" onSubmit={(event) => {
+              event.preventDefault(); navigate({ q: draft.trim() });
+            }}>
+              <div className="input-wrap"><Search size={17} aria-hidden="true" />
+                <input type="search" aria-label="Search renders by title or source" maxLength={180} placeholder="Search renders" value={draft}
+                  onChange={(event) => setDraft(event.target.value)} /></div>
+              <button type="submit" className="secondary-button">Search</button>
+            </form>
+            <button className="secondary-button library-filter-toggle" type="button" aria-expanded={filtersOpen}
+              aria-controls="library-advanced-filters" onClick={() => setFiltersOpen(!filtersOpen)}>
+              <SlidersHorizontal size={16} aria-hidden="true" /> Filters {extraFilters > 0 && <span>{extraFilters}</span>}
+            </button>
+          </div>
+          <div className="library-quick-filters" role="group" aria-label="Filter by render status">
+            {quickStatuses.map(([value, label]) => <button type="button" key={value} aria-pressed={status === value}
+              onClick={() => navigate({ status: value })}>{label}</button>)}
+          </div>
+          <div className="library-filters" id="library-advanced-filters" hidden={!filtersOpen}>
             {[["mode", "Mode"], ["status", "Status"], ["age", "Age"], ["sort", "Sort by"]].map(([key, label]) => (
               <SelectField key={key} label={label} choices={filters[key]}
                 value={filters[key].some(([value]) => value === params.get(key)) ? params.get(key) : ""}
@@ -215,7 +238,7 @@ export default function RenderLibrary() {
         </div>
         <div className="library-summary">
           <p aria-live="polite">{current ? <><strong>{current.total.toLocaleString()} {current.total === 1 ? "render" : "renders"}</strong>
-            <span><HardDrive size={15} aria-hidden="true" /> {formatBytes(pageBytes)} on this page</span></> : "Loading renders…"}</p>
+            <span><HardDrive size={15} aria-hidden="true" /> {formatBytes(pageBytes)} on this page</span></> : loading ? "Loading renders…" : "Renders unavailable"}</p>
           <div>
             {hasFilters && <button className="secondary-button" type="button" onClick={() => navigate({}, true)}>Clear filters</button>}
             {renders.length > 0 && <button aria-pressed={selecting} className="secondary-button" type="button"
@@ -230,7 +253,9 @@ export default function RenderLibrary() {
             onChange={(event) => setSelected(event.target.checked ? deletable.map((render) => render.id) : [])} />
             Select this page</label>
           <span>{checked.length} selected · {formatBytes(checked.reduce((total, render) => total + render.bytes, 0))}</span>
-          <button className="danger-button" type="button" disabled={loading || !checked.length} onClick={() => openDelete(checked)}>
+          {workSelection.length > 0 && <button className="secondary-button" type="button" disabled={loading} onClick={() => openCleanup(workSelection, true)}>
+            <Eraser size={15} aria-hidden="true" /> Clear working files</button>}
+          <button className="danger-button" type="button" disabled={loading || !checked.length} onClick={() => openCleanup(checked)}>
             <Trash2 size={15} aria-hidden="true" /> Delete selected</button>
         </div>}
         {notice && <p className="library-notice" role="status">{notice}</p>}
@@ -238,9 +263,10 @@ export default function RenderLibrary() {
         {!loading && error && <button className="secondary-button library-retry" type="button"
           onClick={() => setAttempt((value) => value + 1)}>Try again</button>}
         <div aria-busy={loading}>
+          {!current && loading && <div className="library-loading" aria-hidden="true"><i /><i /><i /></div>}
           {renders.length ? <ul className="library-list">
             {renders.map((render) => <LibraryRow key={render.id} render={render} selecting={selecting}
-              selected={selected.includes(render.id)} onDelete={openDelete}
+              selected={selected.includes(render.id)} onCleanup={openCleanup}
               onSelect={(id, checked) => setSelected((current) => checked ? [...current, id] : current.filter((item) => item !== id))} />)}
           </ul> : !loading && current && <div className="library-empty">
             <LibraryBig size={26} aria-hidden="true" />
@@ -257,7 +283,7 @@ export default function RenderLibrary() {
             onClick={() => navigate({ page: current.page + 1 })}>Next <ChevronRight size={17} aria-hidden="true" /></button>
         </nav>}
       </div>
-      {confirmation && <DeleteDialog renders={confirmation} busy={deleting} error={deleteError}
+      {confirmation && <CleanupDialog {...confirmation} busy={deleting} error={deleteError}
         onCancel={() => setConfirmation(null)} onDelete={remove} />}
     </section>
   );

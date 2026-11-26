@@ -1,28 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Archive, Captions, Clapperboard, FileText, Film, Image as ImageIcon, Link2, LibraryBig, Sparkles, Upload,
+  Archive, ArrowDown, CheckCircle2, Clapperboard, FileVideo, Film, Link2, LibraryBig, Sparkles, Upload, X,
 } from "lucide-react";
 import { api, statusLabels, submit, submitUpload } from "./api";
 import { usePreferences } from "./preferences";
 import RenderOptions, { editingStyles, HighlightOptions } from "./render-options";
 
-const exportItems = [
-  [Film, "MP4 clips", "Named after each clip’s title"],
-  [ImageIcon, "JPG thumbnails", "An editable cover for each clip"],
-  [FileText, "TXT metadata", "Title, description, and topic hashtags"],
-  [Captions, "SRT captions", "Included with captioned clips"],
-];
-const reelItems = [
-  [Film, "One landscape MP4", "Selected moments in source order"],
-  [ImageIcon, "JPG thumbnail", "An editable cover from the selected moments"],
-  [FileText, "TXT metadata", "Description, topic hashtags, and eligible chapters"],
-  [Captions, "SRT captions", "Timed to the finished reel when captions are enabled"],
-];
 const modes = [
   ["shorts", Film, "Short Clips", "A pack of standalone clips"],
   ["highlights", LibraryBig, "Highlights", "One landscape reel up to 30 minutes"],
@@ -34,12 +21,24 @@ function fileSize(bytes) {
     `${Math.max(0.1, bytes / 1024 ** 2).toFixed(1).replace(/\.0$/, "")} MB`;
 }
 
+function outputLabel(options) {
+  if (options.studio_mode === "highlights") return options.highlight_minutes ? `Up to ${options.highlight_minutes} min` : "1–30 min";
+  if (options.selection_mode === "score") {
+    const score = options.editing_style === "gameplay" ? "Activity score" : "Viral score";
+    return options.min_viral_score == null ? score : `${score} ${options.min_viral_score}+`;
+  }
+  return `Up to ${options.clip_count} ${options.clip_count === 1 ? "clip" : "clips"}`;
+}
+
 export default function Studio() {
   const router = useRouter();
   const { preferences, loading: preferencesLoading } = usePreferences();
   const [source, setSource] = useState("");
   const [sourceType, setSourceType] = useState("youtube");
   const [video, setVideo] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const sourceInput = useRef(null);
+  const videoInput = useRef(null);
   const [upload, setUpload] = useState(null);
   const [uploadPercent, setUploadPercent] = useState(null);
   const [overrides, setOverrides] = useState({});
@@ -51,6 +50,12 @@ export default function Studio() {
   const [sending, setSending] = useState(false);
   const [history, setHistory] = useState(null);
   const [historyError, setHistoryError] = useState("");
+
+  useEffect(() => {
+    if (sending) return;
+    if (errors.source_url) sourceInput.current?.focus();
+    if (errors.video) videoInput.current?.focus();
+  }, [errors, sending]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -66,7 +71,25 @@ export default function Studio() {
     setSourceType(type);
     setErrors({});
     setMessage("");
-    if (type === "youtube") setVideo(null);
+    setDragging(false);
+  }
+
+  function fileIssue(file) {
+    if (!file) return "Choose a video file.";
+    if (upload && file.size > upload.max_bytes) return `Choose a video up to ${fileSize(upload.max_bytes)}.`;
+    if (upload?.extensions?.length && !upload.extensions.some((extension) => file.name.toLowerCase().endsWith(extension))) {
+      return "Choose a supported video file such as MP4, MOV, MKV, or WebM.";
+    }
+    return "";
+  }
+
+  function chooseVideo(file) {
+    const issue = file ? fileIssue(file) : "";
+    setDragging(false);
+    setMessage("");
+    setErrors(issue ? { video: [{ message: issue }] } : {});
+    setVideo(issue ? null : file);
+    if (videoInput.current && (!file || issue)) videoInput.current.value = "";
   }
 
   function changeOptions(next) {
@@ -80,8 +103,9 @@ export default function Studio() {
     if (sending || preferencesLoading) return;
     setErrors({});
     setMessage("");
-    if (sourceType === "upload" && (!video || (upload && video.size > upload.max_bytes))) {
-      setErrors({ video: [{ message: video ? `Choose a video up to ${fileSize(upload.max_bytes)}.` : "Choose a video file." }] });
+    const issue = sourceType === "upload" && fileIssue(video);
+    if (issue) {
+      setErrors({ video: [{ message: issue }] });
       return;
     }
     setSending(true);
@@ -95,40 +119,24 @@ export default function Studio() {
     } catch (error) {
       setErrors(error.fields || {});
       setMessage(Object.keys(error.fields || {}).length ? "" : error.message);
-      if (error.fields?.source_url) document.getElementById("source-url")?.focus();
-      if (error.fields?.video) document.getElementById("source-video")?.focus();
       setSending(false);
     }
   }
 
   return (
     <>
-      <section className="hero" aria-labelledby="hero-title">
-        <div className="hero-copy">
-          <h1 id="hero-title">Keep the<br />best moments.</h1>
-          <p>Turn a YouTube video or an upload into short clips or a highlight reel.</p>
-        </div>
-        <div className="hero-art" aria-hidden="true">
-          <Image src="/studio-hero.jpg" alt="" fill priority sizes="(max-width: 800px) 60vw, 580px" />
-          <div className="frame-corners"><i /><i /><i /><i /></div>
-        </div>
-      </section>
-
-      <div className="studio-modes" role="group" aria-label="Studio mode">
-        {modes.map(([mode, Icon, label, description]) => <button key={mode} type="button" className="panel studio-mode"
-          aria-pressed={studio_mode === mode} disabled={sending} onClick={() => changeOptions({ studio_mode: mode })}>
-          <span className="heading-icon"><Icon size={21} aria-hidden="true" /></span>
-          <span><strong>{label}</strong><small>{description}</small></span>
-        </button>)}
-      </div>
+      <header className="page-heading">
+        <div><h1>New render</h1><p>Turn a YouTube video or a local upload into short clips or a highlight reel.</p></div>
+        <a className="secondary-button" href="#history"><ArrowDown size={16} aria-hidden="true" /> Recent renders</a>
+      </header>
 
       <div className="studio-grid">
-        <section className="panel configure" aria-labelledby="configure-title">
+        <section className="panel configure" aria-label="Render setup">
           <div className="panel-heading">
             <span className="heading-icon"><Clapperboard size={21} aria-hidden="true" /></span>
-            <h2 id="configure-title">{highlights ? "Create a highlight reel" : "Create a clip pack"}</h2>
+            <h2>Video source</h2>
           </div>
-          <form onSubmit={generate} className={highlights ? "highlight-form" : undefined}>
+          <form id="new-render-form" onSubmit={generate}>
             <fieldset className="control-group" disabled={sending}>
               <legend className="sr-only">Video source</legend>
               <div className="source-switch">
@@ -142,60 +150,91 @@ export default function Studio() {
                   <label htmlFor="source-url">YouTube URL</label>
                   <div className="input-wrap source">
                     <Link2 size={19} aria-hidden="true" />
-                    <input id="source-url" type="url" value={source} onChange={(event) => setSource(event.target.value)}
+                    <input id="source-url" ref={sourceInput} type="url" value={source} onChange={(event) => {
+                      setSource(event.target.value); setErrors({}); setMessage("");
+                    }}
                       placeholder="https://www.youtube.com/watch?v=…" autoComplete="url" required
                       aria-invalid={Boolean(errors.source_url)} aria-describedby={errors.source_url ? "url-error" : undefined} />
                   </div>
-                  {errors.source_url && <p className="field-error" id="url-error">{errors.source_url[0].message}</p>}
+                  {errors.source_url && <p className="field-error" id="url-error" role="alert">{errors.source_url[0].message}</p>}
                 </>
               ) : (
                 <>
-                  <label className="upload-picker" htmlFor="source-video">
-                    <Upload size={21} aria-hidden="true" />
-                    <span><strong>{video?.name || "Choose a video file"}</strong>
+                  <label className="upload-picker" htmlFor="source-video" data-dragging={dragging}
+                    onDragOver={(event) => {
+                      if (!sending && event.dataTransfer.types.includes("Files")) {
+                        event.preventDefault(); setDragging(true);
+                      }
+                    }}
+                    onDragLeave={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false);
+                    }}
+                    onDrop={(event) => {
+                      if (!event.dataTransfer.types.includes("Files")) return;
+                      event.preventDefault();
+                      if (!sending && event.dataTransfer.files.length) chooseVideo(event.dataTransfer.files[0]);
+                    }}>
+                    {video ? <FileVideo size={22} aria-hidden="true" /> : <Upload size={21} aria-hidden="true" />}
+                    <span><strong>{video?.name || "Choose or drop a video"}</strong>
                       <small id="upload-hint">{video ? fileSize(video.size) :
                         `MP4, MOV, MKV, WebM and more${upload ? ` · up to ${fileSize(upload.max_bytes)}` : ""}`}</small></span>
-                    <input id="source-video" aria-label="Choose a video file" type="file" required
+                    <input id="source-video" ref={videoInput} aria-label="Choose a video file" type="file"
                       accept={upload?.extensions.join(",") || "video/*"} aria-invalid={Boolean(errors.video)}
                       aria-describedby={errors.video ? "upload-hint upload-error" : "upload-hint"}
-                      onChange={(event) => { setVideo(event.target.files[0] || null); setErrors({}); setMessage(""); }} />
+                      onChange={(event) => chooseVideo(event.target.files[0] || null)} />
                   </label>
-                  {errors.video && <p className="field-error" id="upload-error">{errors.video[0].message}</p>}
+                  {video && <button type="button" className="studio-remove-file" onClick={() => {
+                    chooseVideo(null); videoInput.current?.focus();
+                  }}><X size={14} aria-hidden="true" /> Remove file</button>}
+                  {errors.video && <p className="field-error" id="upload-error" role="alert">{errors.video[0].message}</p>}
                 </>
               )}
             </fieldset>
+            <h2 className="studio-output-title">Output</h2>
+            <div className="studio-modes" role="group" aria-label="Studio mode">
+              {modes.map(([mode, Icon, label, description]) => <button key={mode} type="button" className="studio-mode"
+                aria-pressed={studio_mode === mode} disabled={sending} onClick={() => changeOptions({ studio_mode: mode })}>
+                <span className="heading-icon"><Icon size={19} aria-hidden="true" /></span>
+                <span><strong>{label}</strong><small>{description}</small></span>
+              </button>)}
+            </div>
             <fieldset className="control-group" disabled={preferencesLoading || sending}>
               <legend className="sr-only">Render options</legend>
               {highlights ? <HighlightOptions value={renderOptions} onChange={changeOptions} showShared /> :
                 <RenderOptions value={renderOptions} onChange={changeOptions} compact showQuality={sourceType === "youtube"} />}
             </fieldset>
-            {message && <p role="alert" className="field-error">{message}</p>}
-            {Object.entries(errors).filter(([field]) => !["source_url", "video"].includes(field)).map(([field, issues]) => (
-              <p role="alert" className="field-error" key={field}>{issues[0].message}</p>
-            ))}
-            {sending && sourceType === "upload" && <progress className="upload-progress" max={100}
-              value={uploadPercent ?? undefined} aria-label="Video upload progress" />}
-            <button type="submit" className="primary-button generate" disabled={sending || preferencesLoading}>
-              <Sparkles size={19} aria-hidden="true" /> {sending
-                ? (sourceType === "upload" && uploadPercent !== 100 ? `Uploading${uploadPercent === null ? "…" : ` ${uploadPercent}%`}` : "Queuing render…")
-                : highlights ? "Generate highlights" : "Generate clips"}
-            </button>
           </form>
         </section>
 
         <aside className="panel export-panel" aria-labelledby="export-title">
           <div className="panel-heading">
             <span className="heading-icon"><Archive size={20} aria-hidden="true" /></span>
-            <h2 id="export-title">What’s in your ZIP</h2>
+            <h2 id="export-title">ZIP export</h2>
           </div>
-          <ul className="export-list">
-            {(highlights ? reelItems : exportItems).map(([Icon, title, subtitle]) => (
-              <li key={title}>
-                <span className="export-icon"><Icon size={19} aria-hidden="true" /></span>
-                <span><strong>{title}</strong><small>{subtitle}</small></span>
-              </li>
-            ))}
+          <div className="studio-export-format">
+            <Film size={20} aria-hidden="true" />
+            <div><strong>{highlights ? "Landscape highlight reel" : `${editingStyles[renderOptions.editing_style]?.[0] || "Balanced"} clip pack`}</strong>
+              <p>{[highlights ? "16:9" : renderOptions.aspect_ratio, outputLabel(renderOptions),
+                (sourceType === "youtube" || highlights) && `${quality}p`].filter(Boolean).join(" · ")}</p></div>
+          </div>
+          <ul className="studio-export-files" aria-label="Included in the ZIP">
+            <li><CheckCircle2 size={16} aria-hidden="true" /> Titled MP4 {highlights ? "reel" : "clips"}</li>
+            <li><CheckCircle2 size={16} aria-hidden="true" /> JPG {highlights ? "cover" : "covers"} and TXT metadata</li>
+            {caption_style !== "off" && <li><CheckCircle2 size={16} aria-hidden="true" /> SRT when captions are available</li>}
           </ul>
+          <div className="studio-submit">
+            {message && <p role="alert" className="field-error">{message}</p>}
+            {Object.entries(errors).filter(([field]) => !["source_url", "video"].includes(field)).map(([field, issues]) => (
+              <p role="alert" className="field-error" key={field}>{issues[0].message}</p>
+            ))}
+            {sending && sourceType === "upload" && <progress className="upload-progress" max={100}
+              value={uploadPercent ?? undefined} aria-label="Video upload progress" />}
+            <button form="new-render-form" type="submit" className="primary-button generate" disabled={sending || preferencesLoading}>
+              <Sparkles size={19} aria-hidden="true" /> {sending
+                ? (sourceType === "upload" && uploadPercent !== 100 ? `Uploading${uploadPercent === null ? "…" : ` ${uploadPercent}%`}` : "Queuing render…")
+                : highlights ? "Generate highlights" : "Generate clips"}
+            </button>
+          </div>
         </aside>
       </div>
 

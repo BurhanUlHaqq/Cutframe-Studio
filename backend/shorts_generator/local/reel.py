@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 
+from ..control import RenderCancelled
 from .captions import Cue, build_cues, write_ass, write_srt
 from .thumbnails import CoverWindow, create_thumbnail_set
 
@@ -36,11 +37,15 @@ def encode_excerpt(source, folder, part, moment, duration, dimensions, has_audio
     with TemporaryFile() as errors, subprocess.Popen(
         [*command, part], cwd=folder, stdout=subprocess.PIPE, stderr=errors, text=True,
     ) as process:
-        for line in process.stdout:
-            if line.startswith("out_time_us="):
-                value = line.strip().split("=", 1)[1]
-                if value.lstrip("-").isdigit():
-                    progress(min(duration, max(0, int(value) / 1_000_000)))
+        try:
+            for line in process.stdout:
+                if line.startswith("out_time_us="):
+                    value = line.strip().split("=", 1)[1]
+                    if value.lstrip("-").isdigit():
+                        progress(min(duration, max(0, int(value) / 1_000_000)))
+        except RenderCancelled:
+            process.kill()
+            raise
         if process.wait():
             errors.seek(0)
             raise subprocess.CalledProcessError(process.returncode, "FFmpeg highlight encoding", stderr=errors.read())

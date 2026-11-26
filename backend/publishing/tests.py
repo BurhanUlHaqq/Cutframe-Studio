@@ -15,7 +15,7 @@ from studio.exports import job_directory
 from studio.models import Job
 
 from .config import client_config, seal, unseal
-from .models import Authorization, Connection, Platform, Publication, PublishingSettings
+from .models import Authorization, Connection, Platform, Publication, PublicationBatch, PublishingSettings
 from .oauth import exchange
 from .worker import process_next
 
@@ -168,6 +168,153 @@ class PublishingTests(TestCase):
         cancel = reverse("publish_action", args=[response.json()["id"], "cancel"])
         self.assertEqual(Client().post(cancel).status_code, 404)
         self.assertEqual(self.client.post(cancel).json()["status"], "cancelled")
+
+    def bulk_payload(self, *platforms):
+        second = {"name": "clip-02", "title": "Second title", "description": "Second caption", "duration_seconds": 42}
+        self.job.clips = [self.job.clips[0], second]
+        self.job.save(update_fields=["clips"])
+        (job_directory(self.job.id) / "files" / "clip-02.mp4").write_bytes(b"second video")
+        return {
+            "request_id": str(uuid4()), "confirm": True, "privacy": "unlisted", "made_for_kids": "false",
+            "clips": [{"job_id": str(self.job.id), "clip_index": index, "title": clip["title"], "caption": clip["description"]}
+                      for index, clip in enumerate(self.job.clips)],
+            "destinations": [{"platform": platform, "account_id": "123"} for platform in platforms],
+        }
+
+    def test_bulk_posts_persist_each_delivery_and_schedule_a_gap_per_video(self):
+        for platform in ("youtube", "instagram"):
+            self.connect_fixture(platform)
+        payload = self.bulk_payload("youtube", "instagram")
+        payload["clips"][1].update(title="Approved revised title", caption="Revised description #Topic")
+        start = timezone.now().replace(microsecond=0) + timedelta(hours=1)
+        payload.update(scheduled_at=start.isoformat(), spacing_minutes=30)
+        cover = job_directory(self.job.id) / "files" / "clip-02.jpg"
+        cover.write_bytes(b"saved cover")
+        endpoint = reverse("publish_bulk_posts")
+        response = self.client.post(endpoint, payload, content_type="application/json")
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(len(response.json()["posts"]), 4)
+        self.assertEqual(response.json()["batch_id"], payload["request_id"])
+        deliveries = Publication.objects.filter(batch_id=payload["request_id"])
+        self.assertEqual(set(deliveries.filter(clip_index=0).values_list("scheduled_at", flat=True)), {start})
+        self.assertEqual(set(deliveries.filter(clip_index=1).values_list("scheduled_at", flat=True)), {start + timedelta(minutes=30)})
+        youtube = deliveries.get(clip_index=1, platform="youtube")
+        self.assertEqual(youtube.options["title"], "Approved revised title")
+        self.assertEqual(youtube.options["caption"], "Revised description #Topic")
+        self.assertEqual(youtube.options["privacy"], "unlisted")
+        self.assertEqual(youtube.options["thumbnail_file"], "clip-02.jpg")
+        self.assertFalse(process_next())
+        with patch("publishing.queue.timezone.now", return_value=start + timedelta(hours=1)):
+            replay = self.client.post(endpoint, payload, content_type="application/json")
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertCountEqual([post["id"] for post in response.json()["posts"]], [post["id"] for post in replay.json()["posts"]])
+        changed = self.client.post(endpoint, {**payload, "spacing_minutes": 60}, content_type="application/json")
+        self.assertEqual(changed.status_code, 409)
+        self.assertEqual(Publication.objects.count(), 4)
+        history = reverse("publish_posts") + f"?batch={payload['request_id']}"
+        self.assertEqual(len(self.client.get(history).json()["posts"]), 4)
+        self.assertEqual(Client().get(history).status_code, 404)
+
+    def test_bulk_posts_validate_the_whole_batch_before_enqueuing_anything(self):
+        self.connect_fixture("youtube")
+        self.connect_fixture("instagram")
+        payload = self.bulk_payload("youtube", "instagram")
+        endpoint = reverse("publish_bulk_posts")
+        missing = {**payload, "clips": [payload["clips"][0], {**payload["clips"][1], "clip_index": 99}]}
+        response = self.client.post(endpoint, missing, content_type="application/json")
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("Second title", response.json()["error"])
+        self.assertFalse(Publication.objects.exists())
+        self.assertFalse(PublicationBatch.objects.exists())
+        permitted = self.job.clips.copy()
+        permitted[1]["duration_seconds"] = 1200
+        self.job.clips = permitted
+        self.job.save(update_fields=["clips"])
+        response = self.client.post(endpoint, payload, content_type="application/json")
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("Instagram Reels", response.json()["error"])
+        self.assertFalse(Publication.objects.exists())
+        self.assertEqual(self.client.post(endpoint, {**payload, "confirm": False}, content_type="application/json").status_code, 400)
+        other = {**payload, "clips": [{**payload["clips"][0], "job_id": str(uuid4())}]}
+        self.assertEqual(self.client.post(endpoint, other, content_type="application/json").status_code, 404)
+        self.assertEqual(PublicationBatch.objects.count(), 0)
+
+    def test_bulk_json_can_exceed_single_post_limit_and_tiktok_caps_a_schedule_window(self):
+        self.connect_fixture("youtube")
+        self.connect_fixture("tiktok")
+        payload = self.bulk_payload("youtube")
+        self.job.clips += [{"name": f"clip-{i:02}", "title": f"Clip {i}", "duration_seconds": 30} for i in range(3, 7)]
+        self.job.save(update_fields=["clips"])
+        for index, clip in enumerate(self.job.clips):
+            (job_directory(self.job.id) / "files" / f"{clip['name']}.mp4").write_bytes(b"video")
+            if index >= 2:
+                payload["clips"].append({"job_id": str(self.job.id), "clip_index": index, "title": clip["title"]})
+        for clip in payload["clips"]:
+            clip["caption"] = "x" * 4500
+        endpoint = reverse("publish_bulk_posts")
+        strict = Client(enforce_csrf_checks=True)
+        self.assertEqual(strict.post(endpoint, payload, content_type="application/json").status_code, 403)
+        tiktok = {**payload, "destinations": [{"platform": "tiktok", "account_id": "123"}]}
+        result = self.client.post(endpoint, tiktok, content_type="application/json")
+        self.assertEqual(result.status_code, 400, result.content)
+        self.assertIn("spacing_minutes", result.json()["fields"])
+        self.assertFalse(Publication.objects.exists())
+        result = self.client.post(endpoint, payload, content_type="application/json")
+        self.assertEqual(result.status_code, 201, result.content)
+        self.assertEqual(len(result.json()["posts"]), 6)
+
+    def test_bulk_history_returns_a_full_render_sent_to_three_destinations(self):
+        for platform in Platform.values:
+            self.connect_fixture(platform)
+        payload = self.bulk_payload(*Platform.values)
+        for index in range(2, 39):
+            filename = f"clip-{index + 1:02d}"
+            title = f"Clip {index + 1}"
+            self.job.clips.append({"name": filename, "title": title, "duration_seconds": 30})
+            (job_directory(self.job.id) / "files" / f"{filename}.mp4").write_bytes(b"video")
+            payload["clips"].append({"job_id": str(self.job.id), "clip_index": index, "title": title})
+        self.job.save(update_fields=["clips"])
+        payload["spacing_minutes"] = 288
+        result = self.client.post(reverse("publish_bulk_posts"), payload, content_type="application/json")
+        self.assertEqual(result.status_code, 201, result.content)
+        self.assertEqual(len(result.json()["posts"]), 117)
+        history = self.client.get(reverse("publish_posts"), {"batch": result.json()["batch_id"]})
+        self.assertEqual(len(history.json()["posts"]), 117)
+        page = self.client.get(reverse("publish_posts"), {"batch": result.json()["batch_id"], "page": 6}).json()
+        self.assertEqual(page["pagination"], {"page": 6, "pages": 6, "total": 117, "start": 101, "end": 117})
+        self.assertEqual(len(page["posts"]), 17)
+        self.assertTrue(all(row["batch_id"] == result.json()["batch_id"] for row in page["posts"]))
+        self.assertEqual(Client().get(reverse("publish_posts"), {"batch": result.json()["batch_id"], "page": 2}).status_code, 404)
+
+    def test_queue_pagination_reaches_older_posts_and_keeps_workspace_isolation(self):
+        now = timezone.now()
+        records = [Publication(
+            owner=self.owner if index < 103 else uuid4(), job=self.job, clip_index=0, platform=Platform.YOUTUBE,
+            account_id="123", account_label="Fixture channel", options={"title": f"Post {index}", "caption": ""},
+            scheduled_at=now, next_at=now,
+        ) for index in range(104)]
+        Publication.objects.bulk_create(records)
+        Publication.objects.update(created_at=now)
+        url = reverse("publish_posts")
+        first = self.client.get(url, {"page": 1}).json()
+        second = self.client.get(url, {"page": 2}).json()
+        last = self.client.get(url, {"page": 99}).json()
+        expected = sorted(str(row.id) for row in records[:103])
+        self.assertEqual([row["id"] for row in first["posts"]], expected[:20])
+        self.assertEqual([row["id"] for row in second["posts"]], expected[20:40])
+        self.assertEqual([row["id"] for row in last["posts"]], expected[100:])
+        self.assertEqual(last["pagination"], {"page": 6, "pages": 6, "total": 103, "start": 101, "end": 103})
+        self.assertEqual(self.client.get(url, {"page": "invalid"}).json(), first)
+        anonymous = Client().get(url, {"page": 2}).json()
+        self.assertEqual(anonymous, {"posts": [], "pagination": {"page": 1, "pages": 1, "total": 0, "start": 0, "end": 0}})
+
+        Publication.objects.filter(pk=records[0].pk).update(platform=Platform.TIKTOK, status=Publication.Status.FAILED)
+        Publication.objects.filter(pk=records[1].pk).update(status=Publication.Status.REVIEW)
+        Publication.objects.filter(pk=records[103].pk).update(platform=Platform.TIKTOK, status=Publication.Status.FAILED)
+        attention = self.client.get(url, {"page": 1, "status": "attention"}).json()
+        self.assertEqual(attention["pagination"]["total"], 2)
+        tiktok = self.client.get(url, {"page": 1, "status": "attention", "platform": Platform.TIKTOK}).json()
+        self.assertEqual([post["id"] for post in tiktok["posts"]], [str(records[0].id)])
 
     def test_highlight_reels_get_youtube_chapters_and_platform_duration_checks(self):
         chapters = "00:00 Setup\n10:00 Main event\n20:00 Result"

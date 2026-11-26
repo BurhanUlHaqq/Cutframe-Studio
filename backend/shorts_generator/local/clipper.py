@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable, Dict, List, Optional
 
+from ..control import RenderCancelled
 from ..edit_styles import STYLES
 from ..publication import speech_for_description
 from .captions import Cue, build_edited_cues, write_ass, write_srt
@@ -255,6 +256,8 @@ def crop_highlights_local(
                 write_srt(caption_path, cues)
                 result["caption_path"] = str(caption_path)
             results.append(result)
+        except RenderCancelled:
+            raise
         except Exception as e:
             print(f"[clip/local] {i} failed: {e}", flush=True)
             results.append({**h, "clip_url": None, "error": str(e)})

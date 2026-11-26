@@ -31,7 +31,7 @@ export function PreferencesProvider({ children }) {
     return () => abort.abort();
   }, [request]);
 
-  const theme = data?.preferences.theme;
+  const theme = data?.preferences?.theme;
   useEffect(() => {
     if (!theme) return;
     const darkSystem = window.matchMedia("(prefers-color-scheme: dark)");

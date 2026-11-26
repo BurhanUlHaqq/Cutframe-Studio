@@ -95,6 +95,7 @@ export default function DescriptionSettings() {
             <div className="settings-feedback">
               {error && <p className="field-error" role="alert">{error}</p>}
               {notice && <p className="settings-saved" role="status">{notice}</p>}
+              {changed && !busy && !error && <small className="muted">Unsaved changes</small>}
             </div>
             <button className="primary-button" type="submit" disabled={!changed || Boolean(busy)}>
               <Save size={17} aria-hidden="true" /> {busy === "save" ? "Saving…" : "Save description settings"}

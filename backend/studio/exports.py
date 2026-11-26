@@ -91,7 +91,7 @@ def open_published_video(directory, clip):
         return handle
 
 
-def open_archive(job_id, clips):
+def open_archive(job_id, clips, *, on_clip=None):
     """Open the ZIP for this metadata revision, rebuilding it only if needed."""
     directory = job_directory(job_id)
     fingerprint = hashlib.sha256(json.dumps({"version": 2, "clips": clips}, sort_keys=True).encode()).hexdigest()[:20]
@@ -99,17 +99,30 @@ def open_archive(job_id, clips):
     with FileLock(directory / "export.lock"):
         if not final.is_file():
             pending = final.with_suffix(".part")
-            with ZipFile(pending, "w", compression=ZIP_STORED) as archive:
-                for index, clip in enumerate(clips, 1):
-                    name = f"{index:02d}/{publication_filename(clip['title'])}"
-                    with open_published_video(directory, clip) as video, archive.open(f"{name}.mp4", "w", force_zip64=True) as member:
-                        shutil.copyfileobj(video, member, length=1024 * 1024)
-                    archive.write(directory / "files" / thumbnail_filename(clip), f"{name}.jpg")
-                    if clip.get("has_captions"):
-                        subtitles = directory / "files" / f"{clip['name']}.srt"
-                        archive.write(subtitles, f"{name}.srt")
-                    archive.writestr(f"{name}.txt", clip_text(clip))
-            pending.replace(final)
+            try:
+                with ZipFile(pending, "w", compression=ZIP_STORED) as archive:
+                    for index, clip in enumerate(clips, 1):
+                        if on_clip:
+                            on_clip(index, len(clips), False)
+                        name = f"{index:02d}/{publication_filename(clip['title'])}"
+                        with open_published_video(directory, clip) as video, archive.open(f"{name}.mp4", "w", force_zip64=True) as member:
+                            if on_clip is None:
+                                shutil.copyfileobj(video, member, length=1024 * 1024)
+                            else:
+                                while chunk := video.read(1024 * 1024):
+                                    member.write(chunk)
+                                    on_clip(index, len(clips), False)
+                        archive.write(directory / "files" / thumbnail_filename(clip), f"{name}.jpg")
+                        if clip.get("has_captions"):
+                            subtitles = directory / "files" / f"{clip['name']}.srt"
+                            archive.write(subtitles, f"{name}.srt")
+                        archive.writestr(f"{name}.txt", clip_text(clip))
+                pending.replace(final)
+            finally:
+                try:
+                    pending.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
         handle = final.open("rb")
         for old in directory.glob("clips*.zip"):
@@ -122,18 +135,19 @@ def open_archive(job_id, clips):
         return handle
 
 
-def make_export(job, shorts, *, generate_cover=None):
+def make_export(job, shorts, *, generate_cover=None, on_activity=None):
     """Create a ZIP and a matching set of browser-previewable files."""
     directory = job_directory(job.id)
     files = directory / "files"
     files.mkdir(parents=True, exist_ok=True)
     clips = []
     work = (directory / "work").resolve()
+    shorts = [short for short in shorts if short.get("clip_url")]
+    total = len(shorts)
     for short in shorts:
-        if not short.get("clip_url"):
-            continue
-
         index = len(clips) + 1
+        if on_activity:
+            on_activity("prepare", index, total, False)
         title = " ".join(str(short.get("title") or "").split())[:180] or f"Clip {index}"
         description = next((value.strip() for value in (
             short.get("description"), short.get("hook_sentence"), short.get("virality_reason"), title,
@@ -184,7 +198,10 @@ def make_export(job, shorts, *, generate_cover=None):
 
     if not clips:
         raise RuntimeError("No clips rendered successfully.")
-    open_archive(job.id, clips).close()
+    if on_activity:
+        on_activity("zip", 1, total, True)
+    on_clip = (lambda index, count, event: on_activity("zip", index, count, event)) if on_activity else None
+    open_archive(job.id, clips, on_clip=on_clip).close()
     return clips
 
 

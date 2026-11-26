@@ -85,6 +85,8 @@ class Job(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
         RUNNING = "running", "Rendering"
+        CANCELLING = "cancelling", "Stopping"
+        CANCELLED = "cancelled", "Cancelled"
         COMPLETE = "complete", "Ready"
         FAILED = "failed", "Failed"
         DELETING = "deleting", "Cleanup incomplete"
@@ -112,11 +114,14 @@ class Job(models.Model):
     stage = models.CharField(max_length=12, default="queue")
     progress = models.PositiveSmallIntegerField(default=0)
     activity = models.CharField(max_length=240, blank=True)
+    skip_ai_covers = models.BooleanField(default=False)
     events = models.JSONField(default=list, blank=True)
     clips = models.JSONField(default=list)
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    ACTIVE = (Status.QUEUED, Status.RUNNING, Status.CANCELLING)
 
     class Meta:
         ordering = ["-created_at", "id"]

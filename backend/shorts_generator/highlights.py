@@ -14,6 +14,7 @@ import math
 import re
 from typing import Callable, Dict, List, Optional
 
+from .control import RenderCancelled
 from .edit_styles import STYLES
 from .local.llm import call_local_llm
 from .publication import publication_copy
@@ -157,6 +158,8 @@ def detect_content_type(transcript: Dict, llm_fn: LLMFn = call_local_llm) -> Dic
         parsed = parse_model_json(raw)
         if isinstance(parsed, dict):
             return parsed
+    except RenderCancelled:
+        raise
     except Exception:
         pass
     return {"content_type": "other", "density": "medium"}

@@ -108,7 +108,7 @@ export default function PublishingSettings() {
                   placeholder="https://cutframe-auth.example.com"
                   onChange={(value) => change("network", "callback_origin", value)} />
               </div>
-              <p className="ai-help">YouTube uses the local address. TikTok and Instagram use a stable HTTPS hostname.
+              <p className="ai-help">YouTube uses the local address. TikTok inbox drafts and Instagram account connections use a stable HTTPS hostname.
                 Route only their callback paths to Cutframe and open the studio at its local address.</p>
               <a className="secondary-button" href="https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/create-local-tunnel/"
                 target="_blank" rel="noreferrer">Cloudflare Tunnel setup</a>
@@ -128,9 +128,13 @@ export default function PublishingSettings() {
           <section className="panel settings-panel" key={section} aria-labelledby={`publisher-${section}`}>
             <div className="panel-heading">
               <span className="heading-icon"><platform.Icon size={21} aria-hidden="true" /></span>
-              <div><h3 id={`publisher-${section}`}>{entry.name}</h3>
+              <div><h3 id={`publisher-${section}`}>{section === "tiktok" ? "TikTok inbox drafts" : entry.name}</h3>
                 <p>{entry.client_id && entry.has_secret ? "Developer credentials saved" : "Developer credentials required"}</p></div>
             </div>
+            {section === "tiktok" && <div className="publish-connect-hint">
+              <p>Use your existing browser sign-in to post in TikTok Studio.</p>
+              <Link className="secondary-button" href="/publish?mode=tiktok">Go to TikTok Studio tools</Link>
+            </div>}
             <form onSubmit={(event) => save(event, section, fields)}>
               <fieldset className="control-group" disabled={Boolean(busy)}>
                 <legend className="sr-only">{entry.name} developer app</legend>

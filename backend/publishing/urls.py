@@ -12,5 +12,6 @@ urlpatterns = [
     path("finish/", views.finish, name="publish_finish"),
     path("disconnect/<str:platform>/", views.disconnect, name="publish_disconnect"),
     path("posts/", views.posts, name="publish_posts"),
+    path("posts/bulk/", views.bulk_posts, name="publish_bulk_posts"),
     path("posts/<uuid:post_id>/<str:action>/", views.post_action, name="publish_action"),
 ]

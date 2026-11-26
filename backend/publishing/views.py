@@ -1,9 +1,13 @@
+import json
 import secrets
 from datetime import timedelta
 from urllib.parse import urlencode
+from uuid import UUID
 
+from django.core.paginator import Paginator
 from django.db import transaction
 from django.http import Http404, HttpResponseRedirect, JsonResponse
+from django.http.request import UnreadablePostError
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -15,14 +19,17 @@ from studio.models import Job
 from studio.views import ensure_owner, form_data
 
 from .config import PublishError, client_config, publishing_settings, seal
-from .forms import FinishForm, InstagramAppForm, NetworkSettingsForm, PlatformAppForm, PublishForm
-from .models import Authorization, Connection, Platform, Publication, PublishingSettings
+from .forms import (MAX_BATCH_POSTS, BulkPublishForm, FinishForm, InstagramAppForm, NetworkSettingsForm,
+                    PlatformAppForm, PublishForm)
+from .models import Authorization, Connection, Platform, Publication, PublicationBatch, PublishingSettings
 from .oauth import authorize_url, exchange, state_digest
+from .queue import QueueError, destination_account, prepare_post, queue_batch
 from .thumbnails import cover_options, youtube_video_id
-from .worker import clip_path
 
 
 Status = Publication.Status
+BULK_BODY_LIMIT = 2 * 1024**2
+QUEUE_PAGE_SIZE = 20
 
 
 def fail(message, status=400):
@@ -31,7 +38,7 @@ def fail(message, status=400):
 
 def publication_data(post):
     return {
-        "id": post.id, "job_id": post.job_id, "clip_index": post.clip_index, "platform": post.platform,
+        "id": post.id, "job_id": post.job_id, "clip_index": post.clip_index, "platform": post.platform, "batch_id": post.batch_id,
         "account": post.account_label, "title": post.options["title"], "caption": post.options["caption"],
         "status": post.status, "progress": post.progress,
         "scheduled_at": post.scheduled_at, "started_at": post.started_at, "message": post.message, "url": post.url,
@@ -220,7 +227,37 @@ def disconnect(request, platform):
 def posts(request):
     owner = request.session.get("studio_owner")
     if request.method == "GET":
-        return JsonResponse({"posts": [publication_data(post) for post in Publication.objects.filter(owner=owner)[:100]]})
+        history = Publication.objects.filter(owner=owner).order_by("-created_at", "id")
+        batch_id = request.GET.get("batch")
+        if batch_id:
+            try:
+                batch_id = UUID(batch_id)
+            except ValueError as exc:
+                raise Http404 from exc
+            get_object_or_404(PublicationBatch, pk=batch_id, owner=owner)
+            history = history.filter(batch_id=batch_id).order_by("scheduled_at", "created_at", "id")
+        platform = request.GET.get("platform")
+        if platform in Platform.values:
+            history = history.filter(platform=platform)
+        status = request.GET.get("status")
+        if status == "active":
+            history = history.filter(status__in=Publication.ACTIVE)
+        elif status == "attention":
+            history = history.filter(status__in=(Status.FAILED, Status.REVIEW))
+        elif status in Status.values:
+            history = history.filter(status=status)
+        requested = request.GET.get("page")
+        if requested is not None:
+            valid_page = 0 < len(requested) < 10 and requested.isascii() and requested.isdecimal()
+            number = max(1, int(requested)) if valid_page else 1
+            page = Paginator(history, QUEUE_PAGE_SIZE).get_page(number)
+            return JsonResponse({"posts": [publication_data(post) for post in page], "pagination": {
+                "page": page.number, "pages": page.paginator.num_pages, "total": page.paginator.count,
+                "start": page.start_index(), "end": page.end_index(),
+            }})
+        # Preserve the existing feed for consumers that do not request a page.
+        limit = MAX_BATCH_POSTS if batch_id else 100
+        return JsonResponse({"posts": [publication_data(post) for post in history[:limit]]})
     data, error = form_data(request, PublishForm)
     if error is not None:
         return error
@@ -233,48 +270,47 @@ def posts(request):
             return queue_post(owner, job, data)
     except Timeout:
         return fail("This render is in use. Try again in a moment.", status=409)
+    except QueueError as exc:
+        return fail(str(exc), status=exc.status)
 
 
 def queue_post(owner, job, data):
     platform = data["platform"]
     connection = Connection.objects.filter(owner=owner, platform=platform).first()
-    account = next((account for account in connection.accounts if account["id"] == data["account_id"]), None) if connection else None
-    config = client_config(platform)
-    if not account or config.client_id != connection.client_id or not config.secret:
-        return fail("Connect the destination account before publishing.")
-    try:
-        path = clip_path(job, data["clip_index"])
-    except PublishError as exc:
-        return fail(str(exc))
-    clip = job.clips[data["clip_index"]]
-    start, end = clip.get("start_time"), clip.get("end_time")
-    duration = clip.get("duration_seconds")
-    if duration is None and isinstance(start, (int, float)) and isinstance(end, (int, float)):
-        duration = end - start
-    if platform == Platform.INSTAGRAM:
-        if path.stat().st_size > 300_000_000:
-            return fail("Instagram Reels support videos up to 300 MB.")
-        if duration is not None and not 3 <= duration <= 900:
-            return fail("Instagram Reels must be between 3 seconds and 15 minutes.")
-    if platform == Platform.TIKTOK and duration is not None and duration > 600:
-        return fail("TikTok inbox uploads support videos up to 10 minutes.")
-    chapters = clip.get("chapter_text")
-    if platform == Platform.YOUTUBE and chapters and not data["caption"].endswith(chapters):
-        data["caption"] = "\n\n".join(filter(None, (data["caption"], chapters)))
-        if len(data["caption"].encode("utf-8")) > 5000:
-            return fail("Shorten the YouTube description to fit the included chapters within 5,000 bytes.")
-    now = data["scheduled_at"] or timezone.now()
-    options = {field: data[field] for field in ("title", "caption", "privacy", "made_for_kids", "synthetic")}
-    options.update(cover_options(job, data["clip_index"], platform))
-    post, created = Publication.objects.get_or_create(pk=data["request_id"], defaults={
-        "owner": job.owner, "job": job, "clip_index": data["clip_index"], "platform": platform,
-        "account_id": account["id"], "account_label": account["label"][:180],
-        "options": options,
-        "scheduled_at": now, "next_at": now, "message": "Approved and queued for transfer.",
-    })
+    account = destination_account(connection, client_config(platform), data["account_id"])
+    fields = prepare_post(job, data, account, data["scheduled_at"] or timezone.now())
+    post, created = Publication.objects.get_or_create(pk=data["request_id"], defaults=fields)
     if post.owner != job.owner or post.job_id != job.id:
         return fail("This request identifier is unavailable.", status=409)
     return JsonResponse(publication_data(post), status=201 if created else 200)
+
+
+@require_POST
+@never_cache
+def bulk_posts(request):
+    owner = request.session.get("studio_owner")
+    if not owner:
+        raise Http404
+    if request.content_type != "application/json":
+        return fail("Send the batch as JSON.", status=415)
+    # The batch can include many captions. Keep the larger limit scoped to this endpoint.
+    try:
+        raw = request.read(BULK_BODY_LIMIT + 1)
+        if len(raw) > BULK_BODY_LIMIT:
+            return fail("This batch is too large. Choose fewer videos or shorten the captions.", status=413)
+        payload = json.loads(raw)
+    except (ValueError, RecursionError, UnreadablePostError):
+        return fail("The batch could not be read.")
+    if not isinstance(payload, dict):
+        return fail("Send a batch object.")
+    form = BulkPublishForm(payload)
+    if not form.is_valid():
+        return JsonResponse({"fields": form.errors.get_json_data()}, status=400)
+    try:
+        batch, queued, created = queue_batch(owner, form.cleaned_data)
+    except QueueError as exc:
+        return fail(str(exc), status=exc.status)
+    return JsonResponse({"batch_id": batch.id, "posts": [publication_data(post) for post in queued]}, status=201 if created else 200)
 
 
 @require_POST

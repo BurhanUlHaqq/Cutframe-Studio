@@ -6,6 +6,7 @@ from django.utils import timezone
 from filelock import FileLock
 
 from shorts_generator import generate_shorts
+from shorts_generator.control import RenderCancelled
 from shorts_generator.edit_styles import STYLES
 from shorts_generator.local.llm import RankingConfigurationError
 from shorts_generator.local.media import InvalidSourceVideo
@@ -13,6 +14,9 @@ from shorts_generator.pipeline import NoMatchingHighlights
 from shorts_generator.reel import generate_highlight_reel
 
 from .ai_settings import installation_ai, resolve_ai_options, saved_ai_options, transcription_options
+from .checkpoints import (
+    cover_checkpoint_path, load_cover_checkpoint, load_render_checkpoint, save_cover_checkpoint, save_render_checkpoint,
+)
 from .descriptions import BATCH_SIZE, DescriptionError, generate_descriptions, saved_description_options, writer_config
 from .exports import job_directory, make_export, set_ai_thumbnail, thumbnail_reference
 from .models import ClipSelection, HighlightMethod, Job, StudioMode
@@ -43,6 +47,7 @@ def failure_message(stage, exc):
         "rank": "The ranking provider did not return usable highlights. Check its configuration and retry.",
         "render": "The worker could not finish rendering the clips. Retry this render.",
         "export": "The worker could not package the clips. Check available disk space and retry.",
+        "covers": "The worker could not save the thumbnail. Check available disk space and retry.",
     }.get(stage, "The worker could not start this render. Check its configuration and retry.")
 
 
@@ -71,12 +76,53 @@ def enrich_descriptions(job, shorts, ranking_options, installation, report):
             report("export", 92, "Some videos kept their original descriptions.", level="warning")
 
 
+def finish_cancelled(record):
+    stopping = record.filter(status=Job.Status.CANCELLING)
+    events = stopping.values_list("events", flat=True).first()
+    if events is None:
+        return
+    now = timezone.now()
+    message = "Render cancelled. You can run it again or remove it from the Library."
+    event = {"time": now.isoformat(), "stage": "cancelled", "message": message, "level": "info"}
+    stopping.update(status=Job.Status.CANCELLED, stage="cancelled", activity=message,
+                    error="", events=[*events[-39:], event], updated_at=now)
+
+
+def render_source(job, work, options, installation, minimum_score, report):
+    transcription = transcription_options(options, installation)
+    source_options = {
+        "uploaded_video": uploaded_source(job.id) if job.source_name else None,
+        "language": job.language or None, "caption_style": job.caption_style,
+        "whisper_model": transcription.pop("whisper_model"), "transcription": transcription,
+        "out_dir": str(work), "on_progress": report,
+    }
+    if job.studio_mode == StudioMode.HIGHLIGHTS:
+        ranking = None
+        if job.highlight_method == HighlightMethod.TRANSCRIPT:
+            try:
+                ranking = resolve_ai_options(options, installation)
+            except RankingConfigurationError:
+                pass
+        return generate_highlight_reel(
+            job.source_url, minutes=job.highlight_minutes, method=job.highlight_method,
+            quality=job.quality, source_name=job.source_name, ranking=ranking, **source_options,
+        )
+    report("download", 1, f"{STYLES[job.editing_style].label} editing style")
+    return generate_shorts(
+        job.source_url, num_clips=job.clip_count, aspect_ratio=job.aspect_ratio,
+        min_viral_score=minimum_score, clip_length=(job.min_clip_seconds, job.max_clip_seconds),
+        download_format=job.quality, framing=job.framing, editing_style=job.editing_style,
+        ranking=None if job.editing_style == "gameplay" else resolve_ai_options(options, installation), **source_options,
+    )
+
+
 def process_next_job():
     job = Job.objects.filter(status=Job.Status.QUEUED).order_by("created_at").first()
     if job is None:
         return False
 
     record = Job.objects.filter(id=job.id)
+    running = record.filter(status=Job.Status.RUNNING)
     started_at = timezone.now()
     if not record.filter(status=Job.Status.QUEUED).update(
         status=Job.Status.RUNNING, stage="download", progress=1, activity="Preparing render", updated_at=started_at,
@@ -104,7 +150,8 @@ def process_next_job():
                 events.append({"time": updated.isoformat(), "stage": stage, "message": message, "level": level})
                 del events[:-40]
                 fields["events"] = events
-        record.update(**fields)
+        if not running.update(**fields):
+            raise RenderCancelled
 
     try:
         report(stage, progress, "Preparing render")
@@ -112,62 +159,64 @@ def process_next_job():
         work.mkdir(parents=True, exist_ok=True)
         options = saved_ai_options(job.owner)
         installation = installation_ai()
-        transcription = transcription_options(options, installation)
         min_viral_score = job.min_viral_score if job.selection_mode == ClipSelection.SCORE else None
-        source_options = {
-            "uploaded_video": uploaded_source(job.id) if job.source_name else None,
-            "language": job.language or None, "caption_style": job.caption_style,
-            "whisper_model": transcription.pop("whisper_model"), "transcription": transcription,
-            "out_dir": str(work), "on_progress": report,
-        }
-        reel = job.studio_mode == StudioMode.HIGHLIGHTS
-        if reel:
-            ranking = None
-            if job.highlight_method == HighlightMethod.TRANSCRIPT:
-                try:
-                    ranking = resolve_ai_options(options, installation)
-                except RankingConfigurationError:
-                    pass
-            shorts = generate_highlight_reel(
-                job.source_url, minutes=job.highlight_minutes, method=job.highlight_method,
-                quality=job.quality, source_name=job.source_name, ranking=ranking, **source_options,
-            )
+        shorts = load_render_checkpoint(work)
+        if shorts is not None:
+            videos = "video" if len(shorts) == 1 else "videos"
+            report("export", 90, f"Resuming export with {len(shorts)} completed {videos}")
         else:
-            report("download", 1, f"{STYLES[job.editing_style].label} editing style")
-            shorts = generate_shorts(
-                job.source_url, num_clips=job.clip_count, aspect_ratio=job.aspect_ratio,
-                min_viral_score=min_viral_score, clip_length=(job.min_clip_seconds, job.max_clip_seconds),
-                download_format=job.quality, framing=job.framing, editing_style=job.editing_style,
-                ranking=None if job.editing_style == "gameplay" else resolve_ai_options(options, installation),
-                **source_options,
-            )
+            shorts = render_source(job, work, options, installation, min_viral_score, report)
+            save_render_checkpoint(work, shorts)
         successful = sum(bool(clip.get("clip_url")) for clip in shorts)
         for index, clip in enumerate(shorts, 1):
             if not clip.get("clip_url"):
                 report("render", 89, f"Clip {index} could not be rendered", level="warning")
         if successful:
-            export_message = "Packaging the highlight reel" if reel else f"Packaging the ZIP with {successful} clip{'s' if successful != 1 else ''}"
             enrich_descriptions(job, shorts, options, installation, report)
             provider = None
             covers = saved_thumbnail_ai(job.owner)
+            cover_count = min(successful, covers.get("automatic_limit") or successful)
             if covers.get("provider") and covers.get("automatic"):
                 try:
                     provider = image_provider(job.owner, covers)
                 except ThumbnailGenerationError as exc:
                     report("export", 92, f"AI covers unavailable. {exc}", level="warning")
+            if provider and cover_count < successful:
+                report("export", 92, f"Automatic AI cover limit set to {cover_count} of {successful} videos.")
 
             def generate_cover(files, clip, index):
-                report("export", 92 + round(5 * (index - 1) / successful),
-                       f"Generating AI cover {index} of {successful}")
+                nonlocal provider
+                if provider is None or index > cover_count:
+                    return
+                if running.filter(skip_ai_covers=True).exists():
+                    report("export", progress, "Remaining AI covers skipped. Using the frame covers for those videos.")
+                    provider = None
+                    return
+                reference = thumbnail_reference(files, clip)
+                cached_path = cover_checkpoint_path(work, provider, clip, job.aspect_ratio, reference)
+                cached = load_cover_checkpoint(cached_path) if cached_path else None
+                verb = "Reusing" if cached else "Generating"
+                report("covers", 92 + round(5 * (index - 1) / cover_count), f"{verb} AI cover {index} of {cover_count}")
                 try:
-                    content = make_ai_cover(provider, clip, job.aspect_ratio, work,
-                                            reference=thumbnail_reference(files, clip))
+                    content = cached or make_ai_cover(provider, clip, job.aspect_ratio, work, reference=reference)
                     set_ai_thumbnail(files, clip, content, provider.model)
+                    if not cached and cached_path:
+                        save_cover_checkpoint(cached_path, content)
                 except ThumbnailGenerationError as exc:
-                    report("export", progress, f"Clip {index} kept its frame cover. {exc}", level="warning")
+                    if exc.stop_batch:
+                        provider = None
+                        report("export", progress, f"Remaining videos will use frame covers. {exc}", level="warning")
+                    else:
+                        report("export", progress, f"Clip {index} kept its frame cover. {exc}", level="warning")
 
-            report("export", 92, export_message)
-            clips = make_export(job, shorts, generate_cover=generate_cover if provider else None)
+            def export_progress(step, index, total, event):
+                if step == "prepare":
+                    report("export", 92 + 4 * (index - 1) // total, f"Preparing video {index} of {total} for export", event=event)
+                else:
+                    report("export", 97 + 2 * (index - 1) // total, f"Writing ZIP · video {index} of {total}", event=event)
+
+            report("export", 92, "Preparing completed videos for export")
+            clips = make_export(job, shorts, generate_cover=generate_cover if provider else None, on_activity=export_progress)
             message = "ZIP ready to download"
         elif shorts or min_viral_score is None:
             raise RuntimeError("No clips rendered successfully.")
@@ -177,24 +226,31 @@ def process_next_job():
                        else f"No highlights scored {min_viral_score} or higher")
         now = timezone.now()
         events.append({"time": now.isoformat(), "stage": "complete", "message": message, "level": "info"})
-        record.update(
+        if not running.update(
             status=Job.Status.COMPLETE, stage="complete", progress=100,
             clips=clips, error="", activity=message, events=events[-40:], updated_at=now,
-        )
+        ):
+            finish_cancelled(record)
+    except RenderCancelled:
+        finish_cancelled(record)
     except Exception as exc:
-        logger.error("Render %s failed in %s (%s)", job.id, stage, type(exc).__name__)
         now = timezone.now()
         message = failure_message(stage, exc)
         events.append({"time": now.isoformat(), "stage": stage, "message": message, "level": "error"})
-        record.update(
+        if running.update(
             status=Job.Status.FAILED, error=message, activity=message, events=events[-40:], updated_at=now,
-        )
+        ):
+            logger.error("Render %s failed in %s (%s)", job.id, stage, type(exc).__name__)
+        else:
+            finish_cancelled(record)
     return True
 
 
 def run_queue(once=False):
     """Keep one active worker per data volume and resume interrupted renders."""
     with FileLock(settings.STUDIO_DATA_DIR / "worker.lock", timeout=0):
+        for job_id in Job.objects.filter(status=Job.Status.CANCELLING).values_list("id", flat=True).iterator():
+            finish_cancelled(Job.objects.filter(pk=job_id))
         Job.objects.filter(status=Job.Status.RUNNING).update(
             status=Job.Status.QUEUED, stage="queue", progress=0,
             activity="Waiting to resume after worker restart", updated_at=timezone.now(),

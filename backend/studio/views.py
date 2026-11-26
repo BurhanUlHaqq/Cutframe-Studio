@@ -75,6 +75,7 @@ def render_data(job, *, include_activity=True):
         "status": job.status, "stage": job.stage, "progress": job.progress,
         "created_at": job.created_at.isoformat(), "error": job.error, "clips": clips,
         "activity": job.activity,
+        "skip_ai_covers": job.skip_ai_covers,
         **({"events": job.events} if include_activity else {}),
         "archive_url": reverse("archive", args=[job.id]) if job.status == Job.Status.COMPLETE and clips else None,
     }
@@ -285,7 +286,11 @@ def storage_settings(request):
 def jobs(request):
     owner = request.session.get("studio_owner")
     if request.method == "GET":
-        renders = Job.objects.filter(owner=owner).exclude(status=Job.Status.DELETING)[:50] if owner else []
+        renders = Job.objects.filter(owner=owner) if owner else Job.objects.none()
+        if request.GET.get("finished") == "1":
+            renders = renders.filter(status=Job.Status.COMPLETE).exclude(clips=[])
+        else:
+            renders = renders.exclude(status=Job.Status.DELETING)[:50]
         return JsonResponse({
             "jobs": [render_data(job, include_activity=False) for job in renders],
             "upload": {"max_bytes": upload_limit(), "extensions": VIDEO_EXTENSIONS},
@@ -336,15 +341,48 @@ def detail(request, job_id):
 @require_POST
 @never_cache
 @render_operation
+def cancel_render(request, job):
+    with transaction.atomic():
+        job = Job.objects.select_for_update().get(pk=job.pk)
+        if job.status in (Job.Status.CANCELLING, Job.Status.CANCELLED):
+            return JsonResponse(render_data(job))
+        if job.status not in Job.ACTIVE:
+            return JsonResponse({"error": "Only queued or running renders can be cancelled."}, status=409)
+        queued = job.status == Job.Status.QUEUED
+        job.status = Job.Status.CANCELLED if queued else Job.Status.CANCELLING
+        if queued:
+            job.stage = "cancelled"
+        job.activity = "Render cancelled before it started." if queued else "Stopping after the current operation."
+        job.events = [*job.events[-39:], {"time": timezone.now().isoformat(), "stage": job.stage,
+                     "message": job.activity, "level": "info"}]
+        job.save(update_fields=["status", "stage", "activity", "events", "updated_at"])
+    return JsonResponse(render_data(job))
+
+
+@require_POST
+@never_cache
+@render_operation
+def skip_ai_covers(request, job):
+    if not Job.objects.filter(pk=job.pk, status=Job.Status.RUNNING, stage__in=("covers", "export")).update(
+        skip_ai_covers=True, updated_at=timezone.now(),
+    ):
+        return JsonResponse({"error": "AI cover generation is no longer in progress."}, status=409)
+    job.refresh_from_db()
+    return JsonResponse(render_data(job))
+
+
+@require_POST
+@never_cache
+@render_operation
 def retry(request, job):
-    updated = Job.objects.filter(pk=job.pk, status=Job.Status.FAILED).update(
-        status=Job.Status.QUEUED, stage="queue", progress=0, error="", activity="Retry queued",
+    updated = Job.objects.filter(pk=job.pk, status__in=(Job.Status.FAILED, Job.Status.CANCELLED)).update(
+        status=Job.Status.QUEUED, stage="queue", progress=0, error="", activity="Retry queued", skip_ai_covers=False,
         events=[*job.events[-39:], {"time": timezone.now().isoformat(), "stage": "queue",
                                    "message": "Retry queued", "level": "info"}],
         updated_at=timezone.now(),
     )
     if not updated:
-        return JsonResponse({"error": "Only failed renders can be retried."}, status=409)
+        return JsonResponse({"error": "Only failed or cancelled renders can be retried."}, status=409)
     job.refresh_from_db()
     return JsonResponse(render_data(job))
 

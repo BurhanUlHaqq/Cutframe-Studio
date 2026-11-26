@@ -40,6 +40,13 @@ class Authorization(models.Model):
     expires_at = models.DateTimeField(db_index=True)
 
 
+class PublicationBatch(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    owner = models.UUIDField()
+    fingerprint = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class Publication(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
@@ -53,6 +60,7 @@ class Publication(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     owner = models.UUIDField(db_index=True)
+    batch = models.ForeignKey(PublicationBatch, null=True, blank=True, on_delete=models.SET_NULL, related_name="posts")
     ACTIVE = (Status.QUEUED, Status.SENDING, Status.PROCESSING)
 
     job = models.ForeignKey("studio.Job", on_delete=models.SET_NULL, null=True)
