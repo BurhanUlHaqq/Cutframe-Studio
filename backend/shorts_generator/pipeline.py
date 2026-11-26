@@ -54,6 +54,7 @@ def transcribe_source(source_path, language, out_dir, caption_style, whisper_mod
         source_path, language=language, out_dir=out_dir,
         allow_legacy=caption_style == "off" and not whisper_model, whisper_model=whisper_model,
         **(transcription or {}),
+        on_cache=lambda: report("transcribe", 54, "Reusing the saved transcript"),
         on_progress=lambda done, total: report(
             "transcribe", 29 + int(24 * done / total),
             f"Transcribing speech · {_clock(done)} of {_clock(total)}", event=False,

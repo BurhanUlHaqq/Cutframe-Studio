@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +9,8 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from shorts_generator.control import RenderCancelled
+from shorts_generator.local.transcriber import transcribe_local
+from shorts_generator.pipeline import transcribe_source
 
 from .exports import job_directory
 from .models import Job
@@ -114,6 +117,68 @@ class AlternateRenderTests(TestCase):
         self.assertTrue(self.delete_render(original)["removed"])
         refreshed.refresh_from_db()
         self.assertIsNone(refreshed.source_render_id)
+
+    def test_alternate_reuses_matching_word_timings_and_reports_the_cache_hit(self):
+        for source_type in ("upload", "youtube"):
+            with self.subTest(source_type=source_type):
+                if source_type == "upload":
+                    original = self.uploaded(b"fixture video data")
+                    media = uploaded_source(original.id)
+                else:
+                    response = self.client.post(reverse("jobs"), {"source_url": "https://youtu.be/abcdefghijk"},
+                                                content_type="application/json")
+                    original = Job.objects.get(pk=response.json()["id"])
+                    media = job_directory(original.id) / "work" / "source_abcdefghijk.mp4"
+                    media.parent.mkdir(parents=True)
+                    media.write_bytes(b"fixture video data")
+                original.status = Job.Status.COMPLETE
+                original.save(update_fields=["status"])
+                original_work = job_directory(original.id) / "work"
+                original_work.mkdir(exist_ok=True)
+                cache = original_work / f"{media.stem}.transcript.json"
+                stamp = media.stat()
+                identity = {"mtime_ns": stamp.st_mtime_ns, "size": stamp.st_size, "model": "base", "language": "en"}
+                words = [{"start": 1.0, "end": 2.0, "text": "Hello"}]
+                segments = [{"start": 1.0, "end": 2.0, "text": "Hello", "words": words}]
+                cache.write_text(json.dumps({"source": identity, "duration": 8, "segments": segments}), encoding="utf-8")
+
+                result = self.alternate(original.id, language="en", caption_style="highlight")
+                self.assertEqual(result.status_code, 201, result.content)
+                alternate = Job.objects.get(pk=result.json()["id"])
+                work = job_directory(alternate.id) / "work"
+                copied = uploaded_source(alternate.id) if source_type == "upload" else work / media.name
+                events = []
+
+                def report(stage, percent, message, **kwargs):
+                    events.append((stage, message))
+
+                stage_alternate_source(alternate, work, report)
+                with patch("faster_whisper.WhisperModel", side_effect=RuntimeError("Whisper would run")) as model:
+                    transcript = transcribe_source(str(copied), "en", str(work), "highlight", "base", report)
+                    self.assertEqual(transcript["segments"], segments)
+                    self.assertIn(("transcribe", "Reusing the saved transcript"), events)
+                    model.assert_not_called()
+                    for changes in ({"language": "ur"}, {"whisper_model": "small"}, {"vad_filter": True}):
+                        options = {"out_dir": str(work), "language": "en", "whisper_model": "base"} | changes
+                        with self.assertRaisesRegex(RuntimeError, "Whisper would run"):
+                            transcribe_local(str(copied), **options)
+                    self.assertEqual(model.call_count, 3)
+
+                copied_cache = work / cache.name
+                copied_cache.unlink()
+                stage_alternate_source(alternate, work, report)
+                self.assertTrue(copied_cache.is_file())
+                copied_cache.unlink()
+                copied.write_bytes(b"changed video data")
+                stage_alternate_source(alternate, work, report)
+                self.assertFalse(copied_cache.exists())
+
+                cache.write_text(json.dumps({"source": {**identity, "mtime_ns": 1}, "duration": 8,
+                                             "segments": segments}), encoding="utf-8")
+                another = Job.objects.get(pk=self.alternate(original.id).json()["id"])
+                fresh_work = job_directory(another.id) / "work"
+                stage_alternate_source(another, fresh_work, report)
+                self.assertFalse((fresh_work / cache.name).exists())
 
     def test_source_privacy_validation_and_cancelled_copy(self):
         original = self.uploaded(b"test video")

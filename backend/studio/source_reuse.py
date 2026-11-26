@@ -4,6 +4,7 @@ from filelock import Timeout
 
 from shorts_generator.local.downloader import cached_download
 from shorts_generator.local.media import InvalidSourceVideo
+from shorts_generator.local.transcriber import transcript_cache_path, transfer_transcript_cache
 
 from .exports import job_directory, render_lock
 from .models import Job
@@ -37,27 +38,39 @@ def stage_alternate_source(job, work, report):
     if not job.source_render_id:
         return
     upload = uploaded_source(job.id) if job.source_name else None
-    if upload and stored_source(upload):
+    prepared = (upload if stored_source(upload) else None) if upload else cached_download(work, job.video_id)
+    if prepared and transcript_cache_path(prepared, work).is_file():
         return
-    if not upload and cached_download(work, job.video_id):
-        return
+    needs_upload = upload and not prepared
 
     try:
-        with render_lock(job.source_render_id).acquire(timeout=10 if upload else 0):
+        with render_lock(job.source_render_id).acquire(timeout=10 if needs_upload else 0):
             original = Job.objects.filter(pk=job.source_render_id, owner=job.owner).first()
-            if upload:
-                source = uploaded_source(original.id) if original else None
-                if not source or not stored_source(source):
+            source = None
+            if original:
+                original_work = job_directory(original.id) / "work"
+                if upload:
+                    source = uploaded_source(original.id)
+                elif original.status == Job.Status.COMPLETE and original.quality == job.quality:
+                    source = cached_download(original_work, original.video_id)
+            if not source or not stored_source(source):
+                if needs_upload:
                     raise InvalidSourceVideo("The original upload is unavailable. Start a new render and choose the video again.")
-                report("download", 3, "Reusing the original uploaded video")
-                copy_source(source, upload, report)
-            elif original and original.status == Job.Status.COMPLETE and original.quality == job.quality:
-                cached = cached_download(job_directory(original.id) / "work", original.video_id)
-                if cached and stored_source(cached):
-                    report("download", 3, "Preparing the saved YouTube download")
-                    copy_source(cached, work / cached.name, report)
+                return
+            if prepared:
+                transfer_transcript_cache(
+                    source, original_work, prepared, work,
+                    on_verify=lambda checked: report(
+                        "download", 4, f"Verifying saved source video · {checked / 1024**2:.1f} MB checked", event=False,
+                    ),
+                )
+                return
+            destination = upload or work / source.name
+            report("download", 3, "Reusing the original uploaded video" if upload else "Preparing the saved YouTube download")
+            copy_source(source, destination, report)
+            transfer_transcript_cache(source, original_work, destination, work)
     except (OSError, Timeout) as failure:
-        if upload:
+        if needs_upload:
             message = ("The source render is busy. Try again when its current operation finishes." if isinstance(failure, Timeout)
                        else "Cutframe could not copy the original upload. Check available disk space and retry.")
             raise InvalidSourceVideo(message) from failure

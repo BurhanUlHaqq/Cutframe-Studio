@@ -3,6 +3,7 @@
 Reads a local media file and caches the transcript with Whisper word timing.
 """
 import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -11,6 +12,73 @@ from typing import Callable, Dict, Optional
 import numpy as np
 
 from ..config import DEFAULT_VAD_PARAMETERS, DEFAULT_WHISPER_MODEL
+
+
+def _media_stamp(source):
+    stat = source.stat()
+    return {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+
+
+def transcript_cache_path(source, out_dir):
+    return Path(out_dir) / f"{source.stem}.transcript.json"
+
+
+def _read_word_transcript(cache_path):
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if (isinstance(cached["source"], dict) and isinstance(cached["segments"], list) and cached["segments"]
+                and math.isfinite(cached["duration"]) and cached["duration"] > 0):
+            return cached
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
+def _write_transcript(cache_path, transcript):
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    pending = cache_path.with_suffix(".part")
+    try:
+        pending.write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
+        pending.replace(cache_path)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def _same_media(source, copied_source, on_bytes):
+    checked = 0
+    with source.open("rb") as original, copied_source.open("rb") as copy:
+        while chunk := original.read(8 * 1024 * 1024):
+            if copy.read(len(chunk)) != chunk:
+                return False
+            checked += len(chunk)
+            on_bytes(checked)
+    return True
+
+
+def transfer_transcript_cache(source, original_work, copied_source, work, *, on_verify=None):
+    """Carry word timings to an identical source. Verify copies left by earlier runs."""
+    original_cache = transcript_cache_path(source, original_work)
+    target_cache = transcript_cache_path(copied_source, work)
+    if original_cache.is_symlink() or target_cache.exists():
+        return
+    cached = _read_word_transcript(original_cache)
+    if not cached or not all(isinstance(segment, dict) and isinstance(segment.get("words"), list)
+                             for segment in cached["segments"]):
+        return
+    try:
+        original_stamp = _media_stamp(source)
+        target_stamp = _media_stamp(copied_source)
+        identity = cached["source"]
+        if original_stamp["size"] != target_stamp["size"] or any(
+            identity.get(key) != value for key, value in original_stamp.items()
+        ):
+            return
+        if on_verify is not None and not _same_media(source, copied_source, on_verify):
+            return
+        _write_transcript(target_cache, {**cached, "source": {**identity, **target_stamp}})
+    except OSError:
+        # A missing cache or a disk write failure still allows normal transcription.
+        pass
 
 
 def _parse_srt_timestamp(value: str) -> float:
@@ -82,30 +150,31 @@ def transcribe_local(
     whisper_model: Optional[str] = None,
     whisper_device: str = "auto", vad_filter: bool = False, vad_parameters: Optional[Dict] = None,
     on_progress: Optional[Callable[[float, float], None]] = None,
+    on_cache: Optional[Callable[[], None]] = None,
 ) -> Dict:
     """Run Whisper or reuse a transcript matching this source, model, and language."""
     source = Path(media_path)
     model_name = whisper_model or DEFAULT_WHISPER_MODEL
     vad_options = DEFAULT_VAD_PARAMETERS | (vad_parameters or {}) if vad_filter else {}
-    stat = source.stat()
-    cache_path = Path(out_dir) / f"{source.stem}.transcript.json"
-    identity = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size,
-                "model": model_name, "language": language}
+    stamp = _media_stamp(source)
+    cache_path = transcript_cache_path(source, out_dir)
+    identity = {**stamp, "model": model_name, "language": language}
     if vad_filter:
         identity["vad"] = vad_options
-    try:
-        cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached["source"] == identity and cached["segments"] and cached["duration"] > 0:
-            print(f"[transcribe/local] reusing word timings: {cache_path}", flush=True)
-            return cached
-    except (OSError, ValueError, TypeError, KeyError):
-        pass
+    cached = _read_word_transcript(cache_path)
+    if cached and cached["source"] == identity:
+        print(f"[transcribe/local] reusing word timings: {cache_path}", flush=True)
+        if on_cache is not None:
+            on_cache()
+        return cached
 
     legacy = Path(out_dir) / f"{source.stem}.srt"
-    if allow_legacy and not vad_filter and legacy.is_file() and legacy.stat().st_mtime_ns >= stat.st_mtime_ns:
+    if allow_legacy and not vad_filter and legacy.is_file() and legacy.stat().st_mtime_ns >= stamp["mtime_ns"]:
         try:
             cached = _load_srt_cache(legacy)
             if cached["segments"] and cached["duration"] > 0:
+                if on_cache is not None:
+                    on_cache()
                 return cached
         except (OSError, ValueError):
             pass
@@ -158,9 +227,6 @@ def transcribe_local(
     duration = duration or (segments[-1]["end"] if segments else 0.0)
     print(f"[transcribe/local] {len(segments)} segments, {duration:.0f}s of audio", flush=True)
     transcript = {"source": identity, "duration": duration, "segments": segments}
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    pending = cache_path.with_suffix(".part")
-    pending.write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
-    pending.replace(cache_path)
+    _write_transcript(cache_path, transcript)
     print(f"[transcribe/local] wrote cache: {cache_path}", flush=True)
     return transcript

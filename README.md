@@ -61,7 +61,7 @@ The uploader accepts MP4, MOV, M4V, MKV, WebM, AVI, MPEG, and MPEG transport str
 
 The render page shows the worker's current action and estimated progress. Open **Render activity** for worker updates. You can leave the page and return through the Library. **Cancel render** stops queued work immediately and running work at the next checkpoint. An AI request already in progress can take a moment to finish. Retry reuses the uploaded source and can reuse completed videos and matching AI covers if export was interrupted.
 
-Open a Short Clips render and choose **Create a highlight reel**, or open a Highlights render and choose **Create short clips**. Set the options for the new output and queue it from the same original video. Each render has its own ZIP and can be reviewed or published separately. Cutframe reuses a saved YouTube download when available at the same requested quality. Uploaded videos are copied locally by the worker, so you can remove the source render once the new render has prepared its own copy.
+Open a Short Clips render and choose **Create a highlight reel**, or open a Highlights render and choose **Create short clips**. Set the options for the new output and queue it from the same original video. Each render has its own ZIP and can be reviewed or published separately. Cutframe reuses a saved YouTube download when available at the same requested quality. Uploaded videos are copied locally by the worker, so you can remove the source render once the new render has prepared its own copy. A saved transcript is reused when it matches the copied video, language, Whisper model, and voice activity settings. A change to caption styling can use the same word timings.
 
 ## Configure AI models
 
