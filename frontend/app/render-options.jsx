@@ -50,7 +50,7 @@ export function SelectField({ label, value, choices, onChange }) {
 export function HighlightOptions({ value, onChange, showShared = false }) {
   const id = useId();
   const minutes = value.highlight_minutes;
-  const language = value.language;
+  const language = value.language ?? "";
   const languageOptions = languages.some(([code]) => code === language) ? languages : [...languages, [language, language.toUpperCase()]];
   return (
     <div className="highlight-options">
@@ -132,7 +132,8 @@ function EditingStylePicker({ value, onChange }) {
 
 export default function RenderOptions({ value, onChange, compact = false, showQuality = true }) {
   const id = useId();
-  const { clip_count: count, aspect_ratio: ratio, quality, language, framing, caption_style } = value;
+  const { clip_count: count, aspect_ratio: ratio, quality, framing, caption_style } = value;
+  const language = value.language ?? "";
   const { selection_mode, min_viral_score, min_clip_seconds, max_clip_seconds } = value;
   const style = value.editing_style || "balanced";
   const gameplay = style === "gameplay";

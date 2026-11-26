@@ -11,6 +11,7 @@ export default function Shell({ children }) {
   const onStudio = pathname === "/";
   const onSettings = pathname === "/settings";
   const onRender = pathname.startsWith("/jobs/");
+  const alternate = onRender && pathname.endsWith("/alternate");
   const onLibrary = pathname === "/library";
   const onPublish = pathname === "/publish";
   const section = useSettingsSection();
@@ -65,7 +66,11 @@ export default function Shell({ children }) {
         <main id="main-content" className="content" tabIndex={-1}>
           {onRender && <nav className="workspace-breadcrumb" aria-label="Breadcrumb">
             <Link href="/library"><LibraryBig size={16} aria-hidden="true" /> Library</Link>
-            <ChevronRight size={15} aria-hidden="true" /><span aria-current="page">Render details</span>
+            <ChevronRight size={15} aria-hidden="true" />
+            {alternate ? <>
+              <Link href={pathname.slice(0, -"/alternate".length)}>Render details</Link>
+              <ChevronRight size={15} aria-hidden="true" /><span aria-current="page">Reuse source</span>
+            </> : <span aria-current="page">Render details</span>}
           </nav>}
           {children}
         </main>

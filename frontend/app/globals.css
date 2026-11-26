@@ -366,6 +366,8 @@ form .upload-picker {
 .studio-export-format > svg { flex-shrink: 0; }
 .studio-export-format strong { display: block; font-size: .89rem; }
 .studio-export-format p { font-size: .77rem; margin-top: 2px; color: var(--muted-dark); }
+.reused-video { overflow-wrap: anywhere; }
+.reused-video .field-error { color: var(--danger-ink); }
 .studio-export-files { display: grid; gap: 7px; list-style: none; padding: 0; margin: 14px 0; color: var(--muted-dark); font-size: .83rem; }
 .studio-export-files li { display: flex; align-items: center; gap: 7px; }
 .studio-export-files svg { flex-shrink: 0; color: var(--success-ink); }
@@ -505,6 +507,7 @@ form .upload-picker {
 .render-panel > .secondary-button { margin-top: 13px; }
 .render-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .render-title p { font-size: .9rem; margin-top: 4px; }
+.render-source-link { color: var(--accent-ink); font-size: .83rem; text-decoration: underline; }
 .render-progress { margin-top: 22px; }
 .render-cancelled, .render-cover-action { display: flex; align-items: center; gap: 9px 12px; flex-wrap: wrap; margin-top: 12px; color: var(--muted); font-size: .88rem; }
 .thumbnail-cover-limit { max-width: 360px; margin-top: 10px; }

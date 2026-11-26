@@ -120,5 +120,10 @@ def highlight_job_options(data):
     return data
 
 
+class AlternateRenderForm(RenderOptionsForm):
+    def clean(self):
+        return highlight_job_options(super().clean())
+
+
 class StorageSettingsForm(forms.Form):
     max_upload_mib = forms.IntegerField(min_value=1, max_value=16384)

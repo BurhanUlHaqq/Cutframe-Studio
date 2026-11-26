@@ -7,7 +7,7 @@ from django.core.files.move import file_move_safe
 from django.http import JsonResponse
 
 from .exports import job_directory
-from .models import InstallationSettings
+from .models import InstallationSettings, Job
 
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mpg", ".mpeg", ".ts", ".mts", ".m2ts")
@@ -36,6 +36,21 @@ class UploadLimitMiddleware:
 
 def uploaded_source(job_id):
     return job_directory(job_id) / "input" / "source"
+
+
+def stored_source(path):
+    """Check a regular source file inside render-owned storage."""
+    try:
+        return (not path.is_symlink() and not any(parent.is_symlink() for parent in path.parents[:3])
+                and path.is_file() and path.stat().st_size > 0)
+    except OSError:
+        return False
+
+
+def source_available(job):
+    if job.status == Job.Status.DELETING:
+        return False
+    return stored_source(uploaded_source(job.id)) if job.source_name else bool(job.source_url)
 
 
 def store_upload(job_id, video):

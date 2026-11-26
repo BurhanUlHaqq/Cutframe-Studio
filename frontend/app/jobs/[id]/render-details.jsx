@@ -297,15 +297,21 @@ export default function RenderDetails({ id }) {
                 complete ? reel ? "Your highlight reel is ready" : "Your clips are ready" :
                 reel ? "Creating your highlight reel" : "Creating your clips"}</h1>
               <p>{complete ? reel ? `${formatTime(job.clips[0]?.end_time || 0)} runtime` : countLabel : selection} · {job.aspect_ratio} · {job.source_name || `${job.quality}p`}{!reel && job.editing_style && ` · ${editingStyles[job.editing_style]?.[0]}`}</p>
+              {job.source_render_id && <Link className="render-source-link" href={`/jobs/${job.source_render_id}`}>View source render</Link>}
             </div>
           </div>
-          {noMatches ? <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link> :
-            complete ? <a className="primary-button" href={job.archive_url}><Download size={18} aria-hidden="true" /> Download ZIP</a> :
-            <div className="render-result-actions">
+          <div className="render-result-actions">
+            {noMatches ? <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link> :
+              complete ? <a className="primary-button" href={job.archive_url}><Download size={18} aria-hidden="true" /> Download ZIP</a> : <>
               <span className={`status ${job.status}`}>{statusLabels[job.status]}</span>
               {canCancel && <button className="secondary-button" type="button" disabled={Boolean(renderAction)}
                 onClick={() => changeRender("cancel")}>Cancel render</button>}
-            </div>}
+              </>}
+            {job.can_reuse_source && <Link className="secondary-button" href={`/jobs/${job.id}/alternate`}>
+              {reel ? <Film size={17} aria-hidden="true" /> : <Clapperboard size={17} aria-hidden="true" />}
+              {reel ? "Create short clips" : "Create a highlight reel"}
+            </Link>}
+          </div>
         </div>
         {error && <p className="field-error" role="alert">{error}</p>}
         {failed || cancelled ? (

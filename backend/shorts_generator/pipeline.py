@@ -42,7 +42,10 @@ def prepare_source(youtube_url, uploaded_video, download_format, out_dir, report
         report("download", 5 + min(20, 20 * received // total) if total else 5,
                f"Receiving a source stream · {amount}", event=False)
 
-    return download_youtube_local(youtube_url, fmt=download_format, out_dir=out_dir, on_bytes=download_progress)
+    return download_youtube_local(
+        youtube_url, fmt=download_format, out_dir=out_dir, on_bytes=download_progress,
+        on_cache=lambda: report("download", 25, "Reusing the saved YouTube download"),
+    )
 
 
 def transcribe_source(source_path, language, out_dir, caption_style, whisper_model, report, *, transcription=None):

@@ -32,6 +32,10 @@ class StudioMode(models.TextChoices):
     SHORTS = "shorts", "Short Clips"
     HIGHLIGHTS = "highlights", "Highlights"
 
+    @classmethod
+    def alternate(cls, mode):
+        return cls.SHORTS if mode == cls.HIGHLIGHTS else cls.HIGHLIGHTS
+
 
 class HighlightMethod(models.TextChoices):
     TRANSCRIPT = "transcript", "AI transcript"
@@ -96,6 +100,8 @@ class Job(models.Model):
     source_url = models.URLField(blank=True)
     video_id = models.CharField(max_length=11, blank=True)
     source_name = models.CharField(max_length=255, blank=True)
+    source_render = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL,
+                                      related_name="alternate_renders")
     studio_mode = models.CharField(max_length=10, choices=StudioMode, default=StudioMode.SHORTS)
     highlight_minutes = models.PositiveSmallIntegerField(default=DEFAULT_HIGHLIGHT_MINUTES)
     highlight_method = models.CharField(max_length=10, choices=HighlightMethod, default=HighlightMethod.TRANSCRIPT)

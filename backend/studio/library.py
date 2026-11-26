@@ -19,12 +19,14 @@ from publishing.models import Publication
 
 from .exports import job_directory, render_lock
 from .models import Job, StudioMode
+from .source_reuse import sources_in_use
 
 
 logger = logging.getLogger(__name__)
 PAGE_SIZE = 12
 REMOVABLE = (Job.Status.COMPLETE, Job.Status.FAILED, Job.Status.CANCELLED, Job.Status.DELETING)
 PUBLISHING_REASON = "This render has a scheduled or active publication. Cancel it or wait for it to finish."
+SOURCE_IN_USE = "Another render still needs this upload. Let it prepare its source or remove the alternate render first."
 
 
 def render_bytes(directory):
@@ -48,14 +50,14 @@ def library_status(job):
     return job.status
 
 
-def summarize(job, bytes_used, publishing):
+def summarize(job, bytes_used, publishing, source_in_use):
     ready = job.status == Job.Status.COMPLETE and bool(job.clips)
     first_clip = job.clips[0] if ready else {}
     thumbnail = reverse("media", args=[job.id, 0, "thumbnail"]) if ready else None
     if ready and first_clip.get("thumbnail_file"):
         thumbnail += f"?v={first_clip['thumbnail_file']}"
     blocked = ("Wait for this render to finish before deleting it." if job.status not in REMOVABLE else
-               PUBLISHING_REASON if publishing else "")
+               PUBLISHING_REASON if publishing else SOURCE_IN_USE if source_in_use else "")
     return {
         "id": str(job.id), "title": first_clip.get("title") or job.source_name or f"YouTube video {job.video_id}",
         "source": job.source_name or f"YouTube · {job.video_id}", "studio_mode": job.studio_mode,
@@ -64,6 +66,7 @@ def summarize(job, bytes_used, publishing):
         "work_bytes": render_bytes(job_directory(job.id) / "work") if job.status == Job.Status.COMPLETE else 0,
         "aspect_ratio": job.aspect_ratio, "thumbnail_url": thumbnail,
         "archive_url": reverse("archive", args=[job.id]) if ready else None, "delete_blocked": blocked,
+        "source_in_use": source_in_use,
     }
 
 
@@ -110,10 +113,12 @@ def library(request):
     page = filters.get("page", "1")
     page = min(pages, max(1, int(page))) if 0 < len(page) < 10 and page.isascii() and page.isdecimal() else 1
     current = list(rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE])
-    pending = set(Publication.objects.filter(job_id__in=[job.id for job in current], status__in=Publication.ACTIVE)
+    job_ids = [job.id for job in current]
+    pending = set(Publication.objects.filter(job_id__in=job_ids, status__in=Publication.ACTIVE)
                   .values_list("job_id", flat=True))
+    reused = sources_in_use(job_ids)
     return JsonResponse({"renders": [summarize(job, sizes[job.id] if job.id in sizes else render_bytes(job_directory(job.id)),
-                                              job.id in pending) for job in current],
+                                              job.id in pending, job.id in reused) for job in current],
                          "total": total, "page": page, "pages": pages})
 
 
@@ -132,6 +137,8 @@ def remove_render(owner, job_id, *, work_only=False):
                 return None, "Wait for this render to finish before deleting it."
             if not work_only and Publication.objects.filter(job_id=job_id, status__in=Publication.ACTIVE).exists():
                 return None, PUBLISHING_REASON
+            if not work_only and sources_in_use([job_id]):
+                return None, SOURCE_IN_USE
             directory = job_directory(job_id)
             target = directory / "work" if work_only else directory
             # Only remove the UUID directory inside Cutframe's jobs directory.

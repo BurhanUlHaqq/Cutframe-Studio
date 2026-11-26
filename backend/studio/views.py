@@ -31,13 +31,13 @@ from .descriptions import (DescriptionDraftForm, DescriptionError, DescriptionSe
 from .exports import (clip_text, job_directory, open_archive, open_published_video, publication_filename, render_lock,
                       save_thumbnail_content, set_ai_thumbnail, store_thumbnail_options, thumbnail_filename,
                       thumbnail_reference)
-from .forms import ClipTextForm, JobForm, PreferencesForm, StorageSettingsForm, ThumbnailDesignForm, UploadJobForm
+from .forms import AlternateRenderForm, ClipTextForm, JobForm, PreferencesForm, StorageSettingsForm, ThumbnailDesignForm, UploadJobForm
 from .models import (InstallationSettings, PREFERENCE_FIELDS, RENDER_OPTIONS, Job, StudioMode,
                      WorkspaceAISettings, WorkspacePreferences, WorkspaceThumbnailSettings)
 from .thumbnail_ai import (DEFAULTS as THUMBNAIL_DEFAULTS, ThumbnailAISettingsForm, ThumbnailGenerationError,
                            ThumbnailGenerationForm, image_provider, make_ai_cover, merge_thumbnail_ai,
                            saved_thumbnail_ai, thumbnail_settings_data)
-from .uploads import MIB, VIDEO_EXTENSIONS, store_upload, upload_limit
+from .uploads import MIB, VIDEO_EXTENSIONS, source_available, store_upload, upload_limit
 
 
 def render_data(job, *, include_activity=True):
@@ -70,13 +70,14 @@ def render_data(job, *, include_activity=True):
         "editing_style": job.editing_style,
         "selection_mode": job.selection_mode, "min_viral_score": job.min_viral_score,
         "clip_count": job.clip_count, "aspect_ratio": job.aspect_ratio, "quality": job.quality,
-        "framing": job.framing, "caption_style": job.caption_style,
+        "framing": job.framing, "caption_style": job.caption_style, "language": job.language,
         "min_clip_seconds": job.min_clip_seconds, "max_clip_seconds": job.max_clip_seconds,
         "status": job.status, "stage": job.stage, "progress": job.progress,
         "created_at": job.created_at.isoformat(), "error": job.error, "clips": clips,
         "activity": job.activity,
         "skip_ai_covers": job.skip_ai_covers,
-        **({"events": job.events} if include_activity else {}),
+        **({"events": job.events, "can_reuse_source": source_available(job),
+            "source_render_id": str(job.source_render_id) if job.source_render_id else None} if include_activity else {}),
         "archive_url": reverse("archive", args=[job.id]) if job.status == Job.Status.COMPLETE and clips else None,
     }
 
@@ -336,6 +337,26 @@ def upload_job(request):
 @never_cache
 def detail(request, job_id):
     return JsonResponse(render_data(owned_job(request, job_id)))
+
+
+@require_POST
+@never_cache
+@render_operation
+def create_alternate(request, job):
+    if not source_available(job):
+        return JsonResponse({"error": "The original video for this render is unavailable."}, status=409)
+    mode = StudioMode.alternate(job.studio_mode)
+    defaults = preference_values(saved_preferences(job.owner), RENDER_OPTIONS) | {
+        "studio_mode": mode, "quality": job.quality, "language": job.language, "caption_style": job.caption_style,
+    }
+    data, error = form_data(request, AlternateRenderForm, defaults=defaults)
+    if error is not None:
+        return error
+    if data["studio_mode"] != mode:
+        return JsonResponse({"error": "Choose the other output type for this source."}, status=400)
+    alternate = Job.objects.create(owner=job.owner, source_render=job, source_url=job.source_url,
+                                   source_name=job.source_name, video_id=job.video_id, **data)
+    return JsonResponse(render_data(alternate), status=201)
 
 
 @require_POST

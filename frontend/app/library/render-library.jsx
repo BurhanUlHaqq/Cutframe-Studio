@@ -88,7 +88,7 @@ function LibraryRow({ render, selecting, selected, onSelect, onCleanup }) {
         </span>
         <strong>{formatBytes(render.bytes)}</strong>
         {render.work_bytes > 0 && <small>{formatBytes(render.work_bytes)} working files</small>}
-        {isBlocked && !isActive && <small>Publication pending</small>}
+        {isBlocked && !isActive && <small>{render.source_in_use ? "Source in use" : "Publication pending"}</small>}
       </div>
       <div className="library-row-actions">
         {render.archive_url && <a href={render.archive_url} className="secondary-button" aria-label={`Download ZIP for ${title}`}>

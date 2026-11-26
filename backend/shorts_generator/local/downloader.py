@@ -5,6 +5,7 @@ directly off disk.
 """
 import os
 import re
+from pathlib import Path
 from shutil import which
 from urllib.parse import parse_qs, urlparse
 from typing import Callable, Optional
@@ -56,18 +57,24 @@ def _extract_youtube_video_id(source: str) -> Optional[str]:
     return None
 
 
-def _existing_download(out_dir: str, video_id: str) -> Optional[str]:
+def cached_download(out_dir, video_id: str) -> Optional[Path]:
     """Return a cached download path if we already have this YouTube id."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        return None
     for ext in (".mp4", ".mkv", ".webm"):
-        candidate = os.path.join(out_dir, f"source_{video_id}{ext}")
-        if os.path.exists(candidate):
-            return candidate
+        candidate = Path(out_dir) / f"source_{video_id}{ext}"
+        try:
+            if not candidate.is_symlink() and candidate.is_file() and candidate.stat().st_size:
+                return candidate
+        except OSError:
+            continue
     return None
 
 
 def download_youtube_local(
     video_url: str, *, out_dir: str, fmt: str = "720",
     on_bytes: Optional[Callable[[int, int], None]] = None,
+    on_cache: Optional[Callable[[], None]] = None,
 ) -> str:
     """Download a YouTube video to the job directory or reuse its cached copy."""
     video_url = validate_youtube_url(video_url)
@@ -77,10 +84,12 @@ def download_youtube_local(
 
     video_id = _extract_youtube_video_id(video_url)
     if video_id:
-        cached = _existing_download(out_dir, video_id)
+        cached = cached_download(out_dir, video_id)
         if cached:
             print(f"[download/local] reusing cached download: {cached}", flush=True)
-            return cached
+            if on_cache is not None:
+                on_cache()
+            return str(cached)
 
     yt_dlp = _import_ytdlp()
     print(f"[download/local] {video_url} @ {fmt}p → {out_dir}/", flush=True)

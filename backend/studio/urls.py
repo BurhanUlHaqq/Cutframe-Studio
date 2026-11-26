@@ -19,6 +19,7 @@ urlpatterns = [
     path("api/jobs/", views.jobs, name="jobs"),
     path("api/jobs/upload/", views.upload_job, name="upload_job"),
     path("api/jobs/<uuid:job_id>/", views.detail, name="detail"),
+    path("api/jobs/<uuid:job_id>/alternate/", views.create_alternate, name="create_alternate"),
     path("api/jobs/<uuid:job_id>/cancel/", views.cancel_render, name="cancel_render"),
     path("api/jobs/<uuid:job_id>/skip-ai-covers/", views.skip_ai_covers, name="skip_ai_covers"),
     path("api/jobs/<uuid:job_id>/retry/", views.retry, name="retry"),

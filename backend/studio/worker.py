@@ -20,6 +20,7 @@ from .checkpoints import (
 from .descriptions import BATCH_SIZE, DescriptionError, generate_descriptions, saved_description_options, writer_config
 from .exports import job_directory, make_export, set_ai_thumbnail, thumbnail_reference
 from .models import ClipSelection, HighlightMethod, Job, StudioMode
+from .source_reuse import stage_alternate_source
 from .thumbnail_ai import ThumbnailGenerationError, image_provider, make_ai_cover, saved_thumbnail_ai
 from .uploads import uploaded_source
 
@@ -89,6 +90,7 @@ def finish_cancelled(record):
 
 
 def render_source(job, work, options, installation, minimum_score, report):
+    stage_alternate_source(job, work, report)
     transcription = transcription_options(options, installation)
     source_options = {
         "uploaded_video": uploaded_source(job.id) if job.source_name else None,
