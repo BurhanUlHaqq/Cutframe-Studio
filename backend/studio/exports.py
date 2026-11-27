@@ -65,7 +65,7 @@ def _write_titled_video(source, destination, title):
         pending.replace(destination)
 
 
-def open_published_video(directory, clip):
+def open_published_video(directory, clip, *, on_change=None):
     source = directory / "files" / f"{clip['name']}.mp4"
     title = clip["title"]
     if title == clip.get("embedded_title"):
@@ -77,27 +77,31 @@ def open_published_video(directory, clip):
     revision = hashlib.sha256(title.encode("utf-8")).hexdigest()[:20]
     final = cache / f"{clip['name']}-{revision}.mp4"
     with FileLock(cache / f"{clip['name']}.lock"):
-        if not final.is_file():
+        changed = not final.is_file()
+        if changed:
             if not source.is_file():
                 raise FileNotFoundError(source)
             _write_titled_video(source, final, title)
-        handle = final.open("rb")
         for old in cache.glob(f"{clip['name']}-*.mp4"):
             if old != final:
                 try:
                     old.unlink(missing_ok=True)
+                    changed = True
                 except OSError:
                     pass
-        return handle
+        if changed and on_change:
+            on_change()
+        return final.open("rb")
 
 
-def open_archive(job_id, clips, *, on_clip=None):
+def open_archive(job_id, clips, *, on_clip=None, on_change=None):
     """Open the ZIP for this metadata revision, rebuilding it only if needed."""
     directory = job_directory(job_id)
     fingerprint = hashlib.sha256(json.dumps({"version": 2, "clips": clips}, sort_keys=True).encode()).hexdigest()[:20]
     final = directory / f"clips-{fingerprint}.zip"
     with FileLock(directory / "export.lock"):
-        if not final.is_file():
+        changed = not final.is_file()
+        if changed:
             pending = final.with_suffix(".part")
             try:
                 with ZipFile(pending, "w", compression=ZIP_STORED) as archive:
@@ -124,15 +128,17 @@ def open_archive(job_id, clips, *, on_clip=None):
                 except OSError:
                     pass
 
-        handle = final.open("rb")
         for old in directory.glob("clips*.zip"):
             if old != final:
                 try:
                     old.unlink(missing_ok=True)
+                    changed = True
                 except OSError:
                     # A Windows download can keep the previous revision open.
                     pass
-        return handle
+        if changed and on_change:
+            on_change()
+        return final.open("rb")
 
 
 def make_export(job, shorts, *, generate_cover=None, on_activity=None):

@@ -2,12 +2,12 @@
 
 import json
 import logging
-import os
 import shutil
 from datetime import timedelta
-from stat import S_ISREG
 from uuid import UUID
 
+from django.db.models import BigIntegerField, F
+from django.db.models.functions import Greatest
 from django.http import JsonResponse
 from django.urls import reverse
 from django.utils import timezone
@@ -20,6 +20,7 @@ from publishing.models import Publication
 from .exports import job_directory, render_lock
 from .models import Job, StudioMode
 from .source_reuse import sources_in_use
+from .storage import directory_usage
 
 
 logger = logging.getLogger(__name__)
@@ -29,28 +30,13 @@ PUBLISHING_REASON = "This render has a scheduled or active publication. Cancel i
 SOURCE_IN_USE = "Another render still needs this upload. Let it prepare its source or remove the alternate render first."
 
 
-def render_bytes(directory):
-    if directory.is_symlink():
-        return 0
-    total = 0
-    for folder, _, names in os.walk(directory, followlinks=False):
-        for name in names:
-            try:
-                entry = os.stat(os.path.join(folder, name), follow_symlinks=False)
-                if S_ISREG(entry.st_mode):
-                    total += entry.st_size
-            except OSError:
-                continue
-    return total
-
-
 def library_status(job):
     if job.status == Job.Status.COMPLETE and not job.clips:
         return "empty"
     return job.status
 
 
-def summarize(job, bytes_used, publishing, source_in_use):
+def summarize(job, publishing, source_in_use):
     ready = job.status == Job.Status.COMPLETE and bool(job.clips)
     first_clip = job.clips[0] if ready else {}
     thumbnail = reverse("media", args=[job.id, 0, "thumbnail"]) if ready else None
@@ -62,8 +48,8 @@ def summarize(job, bytes_used, publishing, source_in_use):
         "id": str(job.id), "title": first_clip.get("title") or job.source_name or f"YouTube video {job.video_id}",
         "source": job.source_name or f"YouTube · {job.video_id}", "studio_mode": job.studio_mode,
         "status": library_status(job), "created_at": job.created_at, "progress": job.progress,
-        "clip_count": len(job.clips), "bytes": bytes_used, "editing_style": job.editing_style,
-        "work_bytes": render_bytes(job_directory(job.id) / "work") if job.status == Job.Status.COMPLETE else 0,
+        "clip_count": len(job.clips), "bytes": job.storage_bytes, "editing_style": job.editing_style,
+        "work_bytes": job.work_bytes if job.status == Job.Status.COMPLETE else 0,
         "aspect_ratio": job.aspect_ratio, "thumbnail_url": thumbnail,
         "archive_url": reverse("archive", args=[job.id]) if ready else None, "delete_blocked": blocked,
         "source_in_use": source_in_use,
@@ -95,18 +81,14 @@ def library(request):
     order = filters.get("sort")
     if order == "oldest":
         rows = rows.order_by("created_at", "id")
+    elif order == "largest":
+        rows = rows.order_by("-storage_bytes", "-created_at", "id")
     rows = rows.only("source_url", "video_id", "source_name", "studio_mode", "status", "created_at", "progress",
-                     "clips", "editing_style", "aspect_ratio")
+                     "clips", "editing_style", "aspect_ratio", "storage_bytes", "work_bytes")
     if term:
         rows = [job for job in rows.iterator(chunk_size=100) if any(term in value.casefold() for value in (
             job.source_name, job.source_url, job.video_id, *(clip.get("title", "") for clip in job.clips),
         ))]
-
-    sizes = {}
-    if order == "largest":
-        rows = list(rows)
-        sizes = {job.id: render_bytes(job_directory(job.id)) for job in rows}
-        rows.sort(key=lambda job: sizes[job.id], reverse=True)
 
     total = len(rows) if isinstance(rows, list) else rows.count()
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -117,8 +99,7 @@ def library(request):
     pending = set(Publication.objects.filter(job_id__in=job_ids, status__in=Publication.ACTIVE)
                   .values_list("job_id", flat=True))
     reused = sources_in_use(job_ids)
-    return JsonResponse({"renders": [summarize(job, sizes[job.id] if job.id in sizes else render_bytes(job_directory(job.id)),
-                                              job.id in pending, job.id in reused) for job in current],
+    return JsonResponse({"renders": [summarize(job, job.id in pending, job.id in reused) for job in current],
                          "total": total, "page": page, "pages": pages})
 
 
@@ -146,14 +127,18 @@ def remove_render(owner, job_id, *, work_only=False):
                 return None, "Cutframe could not verify the render's storage location."
             if not work_only:
                 record.update(status=Job.Status.DELETING, updated_at=timezone.now())
-            size = render_bytes(target)
+            size, _ = directory_usage(target)
             try:
                 if target.exists():
                     shutil.rmtree(target)
             except OSError as exc:
+                record.update(updated_at=timezone.now())
                 logger.warning("Render cleanup failed for %s (%s)", job_id, type(exc).__name__)
                 return None, "Some files could not be removed. Close any open downloads and try again."
-            if not work_only:
+            if work_only:
+                record.update(storage_bytes=Greatest(F("storage_bytes") - size, 0, output_field=BigIntegerField()),
+                              work_bytes=0, updated_at=timezone.now())
+            else:
                 record.delete()
     except Timeout:
         return None, "This render is in use. Wait for its current operation to finish and try again."

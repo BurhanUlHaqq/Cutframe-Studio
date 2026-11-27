@@ -1,6 +1,6 @@
 import json
 import re
-from functools import wraps
+from functools import partial, wraps
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -35,6 +35,7 @@ from .exports import (clip_text, job_directory, open_archive, open_published_vid
 from .forms import AlternateRenderForm, ClipTextForm, JobForm, PreferencesForm, StorageSettingsForm, ThumbnailDesignForm, UploadJobForm
 from .models import (InstallationSettings, PREFERENCE_FIELDS, RENDER_OPTIONS, Job, StudioMode,
                      WorkspaceAISettings, WorkspacePreferences, WorkspaceThumbnailSettings)
+from .storage import mark_storage_changed
 from .thumbnail_ai import (DEFAULTS as THUMBNAIL_DEFAULTS, ThumbnailAISettingsForm, ThumbnailGenerationError,
                            ThumbnailDiscoveryForm, ThumbnailGenerationForm, image_provider, list_image_models,
                            make_ai_cover, merge_thumbnail_ai,
@@ -375,7 +376,7 @@ def upload_job(request):
         return JsonResponse({"fields": form.errors.get_json_data()}, status=400)
     data = form.cleaned_data
     video = data.pop("video")
-    job = Job(owner=ensure_owner(request), source_name=video.name, **data)
+    job = Job(owner=ensure_owner(request), source_name=video.name, storage_bytes=video.size, **data)
     try:
         source = store_upload(job.id, video)
     except OSError:
@@ -604,7 +605,7 @@ def archive(request, job):
     if job.status != Job.Status.COMPLETE or not job.clips:
         raise Http404
     try:
-        handle = open_archive(job.id, job.clips)
+        handle = open_archive(job.id, job.clips, on_change=partial(mark_storage_changed, job.id))
     except FileNotFoundError as exc:
         raise Http404 from exc
     source = job.video_id or slugify(Path(job.source_name).stem, allow_unicode=True)[:64].strip("-") or str(job.id)[:8]
@@ -702,7 +703,8 @@ def render_media(request, job, index, kind):
         raise Http404
     if kind == "video":
         if download:
-            handle = open_published_video(job_directory(job.id), clip)
+            handle = open_published_video(job_directory(job.id), clip,
+                                          on_change=partial(mark_storage_changed, job.id))
             return FileResponse(handle, as_attachment=True, filename=title_based, content_type="video/mp4")
         return range_response(request, path)
     if kind == "captions":

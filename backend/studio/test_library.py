@@ -12,6 +12,7 @@ from publishing.models import Platform, Publication
 
 from .exports import job_directory, render_lock
 from .models import Job, StudioMode
+from .storage import refresh_storage_batch
 
 
 class RenderLibraryTests(TestCase):
@@ -57,12 +58,15 @@ class RenderLibraryTests(TestCase):
         self.render("recent highlights.mov", studio_mode=StudioMode.HIGHLIGHTS)
         for index in range(14):
             self.render(f"new render {index}.mp4")
+        while refresh_storage_batch():
+            pass
         result = self.client.get(self.list_url, {"q": "DÉCISIVE", "age": "90", "mode": "shorts", "status": "complete"}).json()
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["renders"][0]["id"], str(old.id))
         self.assertEqual(result["renders"][0]["bytes"], 1000)
         self.assertTrue(result["renders"][0]["thumbnail_url"])
-        result = self.client.get(self.list_url, {"sort": "largest"}).json()
+        with patch("studio.storage.os.walk", side_effect=AssertionError("Library must not walk render files")):
+            result = self.client.get(self.list_url, {"sort": "largest"}).json()
         self.assertEqual(result["renders"][0]["id"], str(old.id))
         self.assertEqual(result["total"], 16)
         self.assertEqual(self.client.get(self.list_url, {"page": "2"}).json()["renders"][-1]["id"], str(old.id))
@@ -117,7 +121,9 @@ class RenderLibraryTests(TestCase):
         archive = self.write(ready, "clips-fixture.zip", 10)
         running = self.render("running.mp4", Job.Status.RUNNING)
         active_source = self.write(running, "work/source.mp4", 55)
-        listed = self.client.get(self.list_url).json()["renders"]
+        refresh_storage_batch()
+        with patch("studio.storage.os.walk", side_effect=AssertionError("Library must not walk render files")):
+            listed = self.client.get(self.list_url).json()["renders"]
         self.assertEqual(next(row for row in listed if row["id"] == str(ready.id))["work_bytes"], 200)
         response = self.client.post(reverse("clear_render_work"), {"ids": [str(ready.id), str(running.id)]},
                                     content_type="application/json")
@@ -125,5 +131,7 @@ class RenderLibraryTests(TestCase):
         self.assertEqual(response.json()["blocked"][0]["id"], str(running.id))
         self.assertFalse(work.exists())
         self.assertTrue(all(path.exists() for path in (upload, export, archive, active_source)))
-        self.assertTrue(Job.objects.filter(pk=ready.id, status=Job.Status.COMPLETE).exists())
+        ready.refresh_from_db()
+        self.assertEqual(ready.status, Job.Status.COMPLETE)
+        self.assertEqual((ready.storage_bytes, ready.work_bytes), (70, 0))
         self.assertTrue(Publication.objects.filter(pk=pending.id, job_id=ready.id, status=Publication.Status.QUEUED).exists())

@@ -1,5 +1,6 @@
 import logging
 import time
+from threading import Event, Thread
 
 from django.conf import settings
 from django.utils import timezone
@@ -21,6 +22,7 @@ from .descriptions import BATCH_SIZE, DescriptionError, generate_descriptions, s
 from .exports import job_directory, make_export, set_ai_thumbnail, thumbnail_reference
 from .models import ClipSelection, HighlightMethod, Job, StudioMode
 from .source_reuse import stage_alternate_source
+from .storage import monitor_storage, storage_values
 from .thumbnail_ai import ThumbnailGenerationError, image_provider, make_ai_cover, saved_thumbnail_ai
 from .uploads import uploaded_source
 
@@ -79,14 +81,16 @@ def enrich_descriptions(job, shorts, ranking_options, installation, report):
 
 def finish_cancelled(record):
     stopping = record.filter(status=Job.Status.CANCELLING)
-    events = stopping.values_list("events", flat=True).first()
-    if events is None:
+    row = stopping.values_list("id", "events").first()
+    if row is None:
         return
-    now = timezone.now()
+    job_id, events = row
+    measured = storage_values(job_id)
+    now = measured["storage_measured_at"]
     message = "Render cancelled. You can run it again or remove it from the Library."
     event = {"time": now.isoformat(), "stage": "cancelled", "message": message, "level": "info"}
     stopping.update(status=Job.Status.CANCELLED, stage="cancelled", activity=message,
-                    error="", events=[*events[-39:], event], updated_at=now)
+                    error="", events=[*events[-39:], event], updated_at=now, **measured)
 
 
 def render_source(job, work, options, installation, minimum_score, report):
@@ -228,21 +232,24 @@ def process_next_job():
             clips = []
             message = (f"No moments reached an activity score of {min_viral_score}" if job.editing_style == "gameplay"
                        else f"No highlights scored {min_viral_score} or higher")
-        now = timezone.now()
+        measured = storage_values(job.id)
+        now = measured["storage_measured_at"]
         events.append({"time": now.isoformat(), "stage": "complete", "message": message, "level": "info"})
         if not running.update(
             status=Job.Status.COMPLETE, stage="complete", progress=100,
-            clips=clips, error="", activity=message, events=events[-40:], updated_at=now,
+            clips=clips, error="", activity=message, events=events[-40:], updated_at=now, **measured,
         ):
             finish_cancelled(record)
     except RenderCancelled:
         finish_cancelled(record)
     except Exception as exc:
-        now = timezone.now()
+        measured = storage_values(job.id)
+        now = measured["storage_measured_at"]
         message = failure_message(stage, exc)
         events.append({"time": now.isoformat(), "stage": stage, "message": message, "level": "error"})
         if running.update(
             status=Job.Status.FAILED, error=message, activity=message, events=events[-40:], updated_at=now,
+            **measured,
         ):
             logger.error("Render %s failed in %s (%s)", job.id, stage, type(exc).__name__)
         else:
@@ -259,9 +266,15 @@ def run_queue(once=False):
             status=Job.Status.QUEUED, stage="queue", progress=0,
             activity="Waiting to resume after worker restart", updated_at=timezone.now(),
         )
-        while True:
-            processed = process_next_job()
-            if once:
-                return
-            if not processed:
-                time.sleep(1)
+        if once:
+            process_next_job()
+            return
+
+        stop_storage = Event()
+        Thread(target=monitor_storage, args=(stop_storage,), name="render-storage", daemon=True).start()
+        try:
+            while True:
+                if not process_next_job():
+                    time.sleep(1)
+        finally:
+            stop_storage.set()
