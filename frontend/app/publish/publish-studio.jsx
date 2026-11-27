@@ -216,7 +216,7 @@ export default function PublishStudio({ initialJob, initialClip, initialMode, in
         platform: destination.platform, account_id: destination.id, title: draft.title, caption: draft.caption,
         privacy: youtube ? draft.privacy : "", made_for_kids: youtube ? draft.made_for_kids : "",
         synthetic: draft.synthetic, scheduled_at: draft.scheduled ? new Date(draft.scheduled).toISOString() : null,
-        confirm: true,
+        confirm: true, highlight_reviewed: reel,
       });
       showQueue("");
       requestId.current = null;
@@ -331,7 +331,7 @@ export default function PublishStudio({ initialJob, initialClip, initialMode, in
               </div>}
             </section>
           </div>
-          {tab === "tiktok" && <TikTokStudio key={selected} clip={clip} caption={draft.caption || ""}
+          {tab === "tiktok" && <TikTokStudio key={selected} clip={clip} reel={reel} caption={draft.caption || ""}
             onCaption={(caption) => change({ caption })} />}
           {tab === "compose" && <form className="panel settings-panel publish-form" onSubmit={queue}>
             <div className="panel-heading">
@@ -396,7 +396,9 @@ export default function PublishStudio({ initialJob, initialClip, initialMode, in
                 </div>
                 {destination && <label className="publish-check">
                   <input type="checkbox" required checked={draft.confirm} onChange={(event) => change({ confirm: event.target.checked })} />
-                  I approve {tiktok ? "sending this draft to" : youtube ? "uploading this video to" : "publishing this Reel for"} {destination.label} on {platforms[destination.platform].name}.
+                  <span>I approve {tiktok ? "sending this draft to" : youtube ? "uploading this video to" : "publishing this Reel for"} {destination.label} on {platforms[destination.platform].name}.
+                    {reel && " I’ve reviewed the reel’s picture, audio, captions, title, description, and cover against the destination’s guidelines, and I have the rights to post it."}
+                  </span>
                 </label>}
               </div>
             </fieldset>

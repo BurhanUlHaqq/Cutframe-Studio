@@ -320,13 +320,40 @@ class PublishingTests(TestCase):
         chapters = "00:00 Setup\n10:00 Main event\n20:00 Result"
         clip = self.job.clips[0]
         clip.update(start_time=0, end_time=1800, chapter_text=chapters)
-        self.job.save(update_fields=["clips"])
+        self.job.studio_mode = "highlights"
+        self.job.save(update_fields=["clips", "studio_mode"])
+        endpoint = reverse("publish_posts")
         for platform in ("tiktok", "instagram"):
             self.connect_fixture(platform)
-            response = self.client.post(reverse("publish_posts"), self.payload(platform), content_type="application/json")
+            payload = {**self.payload(platform), "highlight_reviewed": True}
+            response = self.client.post(endpoint, payload, content_type="application/json")
             self.assertEqual(response.status_code, 400)
             self.assertIn("minutes", response.json()["error"])
-        self.assertEqual(self.queue("youtube").options["caption"], f"The post caption\n\n{chapters}")
+
+        self.connect_fixture("youtube")
+        payload = self.payload("youtube")
+        missing = self.client.post(endpoint, payload, content_type="application/json")
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("rights to post", missing.json()["error"])
+        approved = self.client.post(endpoint, {**payload, "highlight_reviewed": True}, content_type="application/json")
+        self.assertEqual(approved.status_code, 201, approved.content)
+        post = Publication.objects.get()
+        self.assertTrue(post.options["highlight_reviewed"])
+        self.assertEqual(post.options["caption"], f"The post caption\n\n{chapters}")
+
+    def test_batch_requires_highlight_review_before_enqueuing_any_deliveries(self):
+        self.connect_fixture("youtube")
+        self.job.studio_mode = "highlights"
+        self.job.save(update_fields=["studio_mode"])
+        payload = self.bulk_payload("youtube")
+        endpoint = reverse("publish_bulk_posts")
+        missing = self.client.post(endpoint, payload, content_type="application/json")
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("rights to post", missing.json()["error"])
+        self.assertFalse(Publication.objects.exists())
+        approved = self.client.post(endpoint, {**payload, "highlight_reviewed": True}, content_type="application/json")
+        self.assertEqual(approved.status_code, 201, approved.content)
+        self.assertEqual(Publication.objects.count(), 2)
 
     def run_with(self, router):
         client = httpx.Client(transport=httpx.MockTransport(router))

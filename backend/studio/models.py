@@ -72,6 +72,7 @@ class WorkspaceAISettings(models.Model):
     config = models.JSONField(default=dict)
     description_model = models.CharField(max_length=200, blank=True, default="")
     description_automatic = models.BooleanField(default=False)
+    description_connection = models.JSONField(default=dict, blank=True)
 
 
 class WorkspaceThumbnailSettings(models.Model):

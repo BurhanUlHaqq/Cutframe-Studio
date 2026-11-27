@@ -4,11 +4,9 @@ import { useEffect, useState } from "react";
 import { Check, RotateCcw, Save } from "lucide-react";
 import { usePreferences } from "../preferences";
 import RenderOptions, { HighlightOptions, SelectField, studioModes } from "../render-options";
-import AISettings from "./ai-settings";
-import DescriptionSettings from "./description-settings";
+import ModelSettings from "./model-settings";
 import PublishingSettings from "./publishing-settings";
 import StorageSettings from "./storage-settings";
-import ThumbnailAISettings from "./thumbnail-ai-settings";
 import { settingsSections, useSettingsSection } from "./sections";
 
 const themes = [["light", "Light"], ["dark", "Dark"], ["system", "Match system"]];
@@ -94,7 +92,7 @@ function PreferencesPanel({ section, description, children }) {
 export default function SettingsForm() {
   const active = useSettingsSection();
   const [visited, setVisited] = useState(() => new Set([active]));
-  const { render, models, descriptions, thumbnails, publishing, storage, appearance } = settingsSections;
+  const { render, models, publishing, storage, appearance } = settingsSections;
   const opened = (section) => active === section || visited.has(section);
 
   useEffect(() => {
@@ -133,11 +131,7 @@ export default function SettingsForm() {
         </PreferencesPanel>
       </div>}
       {opened(models) && <div hidden={active !== models}>
-        <AISettings />
-      </div>}
-      {opened(descriptions) && <div hidden={active !== descriptions}><DescriptionSettings /></div>}
-      {opened(thumbnails) && <div hidden={active !== thumbnails}>
-        <ThumbnailAISettings />
+        <ModelSettings />
       </div>}
       {opened(publishing) && <div hidden={active !== publishing}>
         <PublishingSettings />

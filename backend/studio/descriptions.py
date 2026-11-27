@@ -11,7 +11,7 @@ from shorts_generator.highlights import parse_model_json
 from shorts_generator.local.llm import PROVIDERS, ranking_client
 from shorts_generator.publication import HASHTAG, description_with_hashtags
 
-from .ai_settings import resolve_ai_options
+from .ai_settings import AISettingsForm, resolve_ai_options
 from .models import WorkspaceAISettings
 
 
@@ -28,9 +28,12 @@ class DescriptionError(ValueError):
     pass
 
 
-class DescriptionSettingsForm(forms.Form):
-    model = forms.CharField(required=False, max_length=200)
+class DescriptionSettingsForm(AISettingsForm):
     automatic = forms.BooleanField(required=False)
+
+
+class DescriptionDiscoveryForm(DescriptionSettingsForm):
+    require_model = False
 
 
 class DescriptionDraftForm(forms.Form):
@@ -40,13 +43,15 @@ class DescriptionDraftForm(forms.Form):
 
 
 def saved_description_options(owner):
-    fields = ("description_model", "description_automatic")
+    fields = ("description_model", "description_automatic", "description_connection")
     saved = WorkspaceAISettings.objects.filter(pk=owner).values_list(*fields).first() if owner else None
-    model, automatic = saved or ("", False)
-    return {"model": model, "automatic": automatic}
+    model, automatic, connection = saved or ("", False, {})
+    return {"provider": "", "base_url": "", **connection, "model": model, "automatic": automatic}
 
 
 def writer_config(options, ranking_options, installation=None):
+    if options.get("provider"):
+        return resolve_ai_options(options, installation)
     config = resolve_ai_options(ranking_options, installation)
     return replace(config, model=options["model"] or config.model)
 
@@ -100,6 +105,7 @@ def generate_descriptions(config, clips, *, platform="social", language=""):
         "Use the first lines to describe the exact subject or moment viewers will see. Explain why it matters with "
         "concrete details supported by the supplied data. If the source has little detail, keep the copy brief and factual. "
         "Avoid exaggerated claims, invented quotes, links, numbers, identities, engagement bait, and generic filler. "
+        "Preserve any established fictional or gameplay context. Avoid shock framing and claims of endorsement. "
         f"Write in the original language of the clip unless the language code is specified ({language or 'auto'}). "
         f"Keep each description under {limit * 4 // 5} characters before hashtags. "
         "Return only a JSON object with key descriptions, whose value is an array of objects with integer id, "

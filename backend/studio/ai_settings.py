@@ -24,23 +24,11 @@ VAD_KEYS = {
 }
 
 
-class AISettingsForm(forms.Form):
-    require_model = True
-    provider = forms.ChoiceField(required=False, choices=[("", "Installation defaults"), *(
-        (provider, info[0]) for provider, info in PROVIDERS.items()
-    )])
-    model = forms.CharField(required=False, max_length=200)
-    base_url = forms.CharField(required=False, max_length=500)
-    api_key = forms.CharField(required=False, max_length=1000)
-    remove_key = forms.BooleanField(required=False)
+class TranscriptionSettingsForm(forms.Form):
     whisper_model = forms.CharField(required=False, max_length=120)
     whisper_device = forms.ChoiceField(required=False, choices=[(value, value) for value in ("", "auto", "cpu", "cuda")])
     whisper_vad = forms.ChoiceField(required=False, choices=[(value, value) for value in ("", "off", "on")])
     vad_parameters = forms.JSONField(required=False)
-
-    def __init__(self, *args, installation=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.installation = installation or {}
 
     def clean_whisper_model(self):
         value = self.cleaned_data["whisper_model"]
@@ -60,6 +48,20 @@ class AISettingsForm(forms.Form):
         if any(value.get(name, 0) > 1 for name in ("threshold", "neg_threshold")):
             raise forms.ValidationError("Speech thresholds must be between 0 and 1.")
         return value
+
+class AISettingsForm(TranscriptionSettingsForm):
+    require_model = True
+    provider = forms.ChoiceField(required=False, choices=[("", "Installation defaults"), *(
+        (provider, info[0]) for provider, info in PROVIDERS.items()
+    )])
+    model = forms.CharField(required=False, max_length=200)
+    base_url = forms.CharField(required=False, max_length=500)
+    api_key = forms.CharField(required=False, max_length=1000)
+    remove_key = forms.BooleanField(required=False)
+
+    def __init__(self, *args, installation=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.installation = installation or {}
 
     def clean(self):
         data = super().clean()
@@ -160,13 +162,17 @@ def transcription_options(options, installation):
 def ai_settings_data(options, installation, *, global_scope=False):
     requested = DEFAULTS | {field: options[field] for field in DEFAULTS if field in options}
     defaults = installation_options(installation)
+    connection = {"provider": requested["provider"], "model": requested["model"], "key_source": ""}
     try:
         config = resolve_ai_options(options, installation)
         source = "saved" if options.get("secret") else "installation" if config.api_key else ""
         connection = {"provider": config.provider, "model": config.model, "base_url": config.base_url,
                       "key_source": source, "has_key": bool(config.api_key)}
+        config.validate()
+        ready = True
     except RankingConfigurationError:
-        connection = {"provider": requested["provider"], "model": requested["model"], "key_source": ""}
+        ready = False
+    connection["ready"] = ready
     return {
         "settings": requested, "connection": connection,
         "installation": {"provider": defaults["provider"], "model": defaults.get("model") or ranking_config(defaults["provider"]).model,

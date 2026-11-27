@@ -2,7 +2,7 @@
 
 Turn a YouTube link or local video into a pack of short clips or a highlight reel. Review and edit the finished videos, download a ZIP, or prepare posts for YouTube, TikTok, and Instagram Reels. Cutframe runs in Docker with a Next.js interface, Django API and workers, and PostgreSQL storage.
 
-[Quick start](#run-with-docker-compose) · [Create a render](#create-a-render) · [AI models](#configure-ai-models) · [Exports](#review-and-export-clips) · [Publishing](#publish-clips) · [Operations](#tests-and-operations) · [License](#license)
+[Quick start](#run-with-docker-compose) · [Create a render](#create-a-render) · [Video downloader](#download-videos) · [AI models](#configure-ai-models) · [Exports](#review-and-export-clips) · [Publishing](#publish-clips) · [Operations](#tests-and-operations) · [License](#license)
 
 ## Run with Docker Compose
 
@@ -25,12 +25,13 @@ Turn a YouTube link or local video into a pack of short clips or a highlight ree
 | Next.js studio | `http://localhost:5031` |
 | Django API | [Health check](http://localhost:5032/api/health/) |
 | Render worker | Runs on the Docker network |
+| Downloader | Runs on the Docker network |
 | Publisher | Runs on the Docker network |
 | PostgreSQL 17 | `db:5432` on the Docker network |
 
 The Docker setup runs without an `.env` file. Save model, publishing, and workspace settings in the browser. Compose binds the web app and API to ports 5031 and 5032 on loopback. To change the storage location, update all three host paths in [compose.yaml](compose.yaml) together.
 
-PostgreSQL stores app settings, encrypted provider credentials, publishing accounts, render history, clip metadata, workspace preferences, and browser sessions in `D:\volumes\Cutframe\postgres`. Compose creates a database password in `D:\volumes\Cutframe\postgres-config` on first startup. Back up that folder and `django.secret` with the database so Cutframe can connect and decrypt the saved credentials.
+PostgreSQL stores app settings, encrypted provider credentials, publishing accounts, render and download history, clip metadata, workspace preferences, and browser sessions in `D:\volumes\Cutframe\postgres`. Compose creates a database password in `D:\volumes\Cutframe\postgres-config` on first startup. Back up that folder and `django.secret` with the database so Cutframe can connect and decrypt the saved credentials.
 
 When the migration runs against a fresh Docker PostgreSQL database, it can import render history, workspace settings, and sessions from `studio.sqlite3` in the existing data directory. The original file stays available as a backup. Uploaded sources, finished exports, and the Whisper cache live in the same shared storage folder. Use the same browser profile and hostname to access your workspace. For example, keep opening `localhost:5031` if that is where you first used Cutframe.
 
@@ -63,19 +64,30 @@ The render page shows the worker's current action and estimated progress. Open *
 
 Open a Short Clips render and choose **Create a highlight reel**, or open a Highlights render and choose **Create short clips**. Set the options for the new output and queue it from the same original video. Each render has its own ZIP and can be reviewed or published separately. Cutframe reuses a saved YouTube download when available at the same requested quality. Uploaded videos are copied locally by the worker, so you can remove the source render once the new render has prepared its own copy. A saved transcript is reused when it matches the copied video, language, Whisper model, and voice activity settings. A change to caption styling can use the same word timings.
 
+## Download videos
+
+Open **Downloader** in the sidebar to save original videos without starting a render. Paste one link per line, choose a resolution preference, and select **Download video**. Use **Save video** when the file is ready. Download history is private to the workspace and remains available when you close the page. You can stop an active download, retry a stopped or failed one, or delete a saved file from Cutframe.
+
+The tool accepts individual public YouTube videos and Shorts, Vimeo videos, Dailymotion videos, TikTok short links and videos, public Instagram reels and video posts, Twitch clips and VODs, and Reddit-hosted videos. It queues up to eight links at a time with a 4 GiB limit for each video. Resolution preferences use the closest source quality. Output stays in the source container or is muxed with its audio without re-encoding, so the extension may vary.
+
+Some platforms restrict downloads by region, sign-in, or network, and site changes can temporarily affect extraction. Use finished videos you have permission to save. The downloader runs as its own Compose service and stores files under `D:/volumes/Cutframe/downloads`. [yt-dlp supported sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+
 ## Configure AI models
 
-**Settings → AI models** has **Installation defaults** for shared provider, model, API key, Whisper device, and voice detection settings. Use **This browser** to override the defaults for a workspace. The worker reads the database when starting a render. API keys are write-only in the UI. **Check connection** checks model visibility through the provider’s metadata API.
+Open **Settings → AI models** to see the saved model for each task. Apply a recommendation to fill the connection fields, then check and save your selection.
 
-Select **Load models** to see the options available through the current connection, or enter a model ID manually. A browser workspace can choose another model while using its installation provider and matching credentials. **Use default** restores the configured model. Changes you make in Settings stay in the section while you move between sections during the same visit.
+| Tab | Runs on | Where to start |
+| --- | --- | --- |
+| Moment detection | OpenAI, Gemini, or an OpenAI-compatible text server | Use a cloud text model for long transcripts, or run Qwen in Ollama or LM Studio. |
+| Transcription | Local faster-whisper on the worker | Start with `base` on CPU. Try `small` for difficult speech or a larger model on a CUDA-enabled worker. |
+| Descriptions | The moment detection connection or an independent text provider | Reuse the existing connection, or save a separate smaller text model for copy and hashtags. |
+| Thumbnails | OpenAI or an OpenAI-compatible image server | Use GPT Image or a locally hosted image model such as FLUX.1 schnell through LocalAI. Frame covers are available with AI generation off. |
 
-| Provider | Configure in Settings |
-| --- | --- |
-| OpenAI | API key and ranking model |
-| Google Gemini | API key and ranking model |
-| OpenAI-compatible server | API base URL, model ID, and optional API key |
+**This workspace** overrides **Installation defaults** for moment detection and transcription. Descriptions and thumbnails are saved per workspace. Settings and encrypted credentials are stored in the database and read by new renders without restarting. The app sends keys to your configured provider and keeps them write-only in the UI.
 
-Start your local model server and load the model before running Cutframe’s connection check. For Ollama on Docker Desktop use `http://host.docker.internal:11434/v1`. When running both apps directly on the host, use `http://localhost:11434/v1`. Saved settings apply without restarting. [OpenShorts local model setup](https://github.com/mutonby/openshorts#6-run-without-a-google-key-local-llm-optional) · [Ollama API compatibility](https://docs.ollama.com/api/openai-compatibility)
+**Load models** lists IDs from the selected provider. **Check connection** checks the selected ID using model metadata. These actions make no generation requests. Some compatible servers omit a model list, so you can also enter a model ID directly.
+
+From a Docker Desktop container, use `http://host.docker.internal:11434/v1` for Ollama, `http://host.docker.internal:1234/v1` for LM Studio, or `http://host.docker.internal:8080/v1` for a LocalAI server on its usual port. Replace the host with `localhost` when Cutframe and the model server both run directly on the host. Install or load your model in the server first and ensure the server accepts connections from Cutframe. Local image servers must support `/images/generations` with an inline base64 response. [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/) · [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility) · [LM Studio local server](https://lmstudio.ai/docs/developer/core/server) · [LocalAI image generation](https://localai.io/docs/models/capabilities/vision/image-generation/)
 
 ## Detect, reframe, and caption
 
@@ -105,19 +117,30 @@ Choose **Highlights** on the new render page and set a maximum of 1–30 minutes
 
 Use the chapter list to jump to each moment and see its original timestamp. The ZIP includes the MP4, a JPG thumbnail, and title and description text, plus an SRT when speech captions were generated. Eligible YouTube chapters are written to the TXT and appended when publishing to YouTube from Cutframe. YouTube requires a verified account for uploads over 15 minutes. [Story-driven summarization](https://openaccess.thecvf.com/content_cvpr_2013/papers/Lu_Story-Driven_Summarization_for_2013_CVPR_paper.pdf) · [YouTube chapter requirements](https://support.google.com/youtube/answer/9884579) · [YouTube upload length limits](https://support.google.com/youtube/answer/71673)
 
+### Community guidelines for highlights
+
+**AI transcript** screens the same timed transcript it uses to find story beats. It excludes passages that the model flags for safety or missing context, then rejects cuts that would include those passages after adjusting timestamps. If no usable moments pass, the render stops. **Local visual activity** picks moments by motion and leaves the content review to you. It is also used when there is no speech or configured ranking model. The render activity log and the review page show which method was used.
+
+Before queueing a highlight reel in **Publish Studio**, watch the full cut with sound and review its captions, title, description, and cover for each destination. Confirm that you have the rights to use the footage, music, and other material in the reel. The same review applies before posting an exported file manually. Transcript screening can miss graphic visuals, on-screen text, and audio or dialogue that was missed during transcription.
+
+- **YouTube** may require the context for sensitive material to appear in the video or audio. Keep context inside the cut and make its cover accurately represent the reel. [Content context on YouTube](https://support.google.com/youtube/answer/6345162) · [Violent or graphic content](https://support.google.com/youtube/answer/2802008) · [Thumbnails policy](https://support.google.com/youtube/answer/9229980)
+- **TikTok** removes violations and can restrict mature content. Check the finished reel and caption before completing an inbox draft or a manual upload. [TikTok Community Guidelines](https://www.tiktok.com/community-guidelines/) · [TikTok’s official policy update](https://newsroom.tiktok.com/create-discover-and-connect-on-tiktok-with-simpler-and-stronger-community-guidelines?lang=en)
+- **Instagram** applies additional recommendation rules to discovery surfaces, including Reels. Sensitive material can have reduced distribution even when allowed. [Meta’s Recommendation Guidelines](https://about.fb.com/news/2020/08/recommendation-guidelines/) · [Instagram’s Sensitive Content Control](https://about.fb.com/news/2021/07/introducing-sensitive-content-control/)
+- **Copyright and monetization** have their own requirements. A short extract, credit, or disclaimer alone gives no permission to reuse a movie scene, stream, or song. YouTube also assesses reused content for monetization. [Fair use on YouTube](https://support.google.com/youtube/answer/9783148) · [YouTube monetization policies](https://support.google.com/youtube/answer/1311392)
+
 ## Review and export clips
 
 Open a finished render to preview each video. The clip card offers **Publish**, **MP4**, and **Edit text**. Expand **More clip actions** to copy the title or post text, edit the thumbnail, or download the JPG, TXT, or available SRT. MP4 downloads use the saved title as the filename and embed it as video metadata. **Copy title** captures the exact title for a manual YouTube upload.
 
 New AI-ranked renders produce specific titles, descriptions grounded in the clip, and up to five topic hashtags in the clip's spoken language. [AutoClip title prompt reference](https://github.com/artbyjazi/autoclip/blob/main/backend/autoclip/prompts/highlight_v1.txt) · [YouTube hashtag guidance](https://support.google.com/youtube/answer/6390658)
 
-Open **Settings → Descriptions** to choose a writing model from your saved OpenAI, Gemini, or OpenAI-compatible text connection. Leave the model ID blank to use the ranking model. Automatic AI descriptions are opt-in and use one text model request per batch of up to 12 finished videos. Drafts use any available speech excerpts and chapter topics to put concrete, searchable details up front. [YouTube description guidance](https://support.google.com/youtube/answer/12948449)
+Open **Settings → AI models → Descriptions** to choose a writing model. Reuse the moment detection connection or configure an independent provider. Automatic AI descriptions are opt-in and use one text model request per batch of up to 12 finished videos. Drafts use any available speech excerpts and chapter topics to put concrete, searchable details up front. [YouTube description guidance](https://support.google.com/youtube/answer/12948449)
 
 Open **Edit text** on a finished clip and choose **Regenerate description** for general social, YouTube, Instagram Reels, or TikTok. Review and edit the draft before saving. Once saved, it is used in the TXT, ZIP, and future publishing drafts.
 
 ### Generate thumbnail artwork
 
-Open **Settings → Thumbnails** and choose an OpenAI image model or enter the model ID and base URL for a compatible server. A local server running on the Docker host uses an address such as `http://host.docker.internal:7860/v1`. The server must accept `POST /images/generations` and return a base64 image in `data[0].b64_json`. OpenAI can use the key saved under **AI models**, and receives a still as a visual reference when available. Both providers receive the clip title, description, and any art direction you add. [OpenAI Images API](https://developers.openai.com/api/reference/resources/images/methods/generate)
+Open **Settings → AI models → Thumbnails** and choose an OpenAI image model or enter the model ID and base URL for a compatible server. A local server running on the Docker host uses an address such as `http://host.docker.internal:7860/v1`. The server must accept `POST /images/generations` and return a base64 image in `data[0].b64_json`. OpenAI can use the key saved under **AI models**, and receives a still as a visual reference when available. Both providers receive the clip title, description, and any art direction you add. [OpenAI Images API](https://developers.openai.com/api/reference/resources/images/methods/generate)
 
 Enable **Automatically generate covers for new renders** to use your selected image model during export. For an existing clip, open **More clip actions → Edit thumbnail** to generate a new AI cover, add art direction, or design a cover from a video frame. A new cover updates the poster, JPG, ZIP, and future YouTube uploads. Frame covers are available when AI covers are skipped or unavailable. [YouTube thumbnail design tips](https://support.google.com/youtube/answer/12340300)
 
@@ -168,7 +191,7 @@ frontend/
 compose.yaml
 ```
 
-The worker downloads the selected Whisper model on first use. Choose the model and device in **Settings → AI models**.
+The worker downloads the selected Whisper model on first use. Choose the model and device in **Settings → AI models → Transcription**.
 
 ## Tests and operations
 
@@ -183,7 +206,7 @@ Check the stack, follow the worker logs, or stop the application.
 
 ```powershell
 docker compose ps
-docker compose logs -f worker publisher
+docker compose logs -f worker publisher downloader
 docker compose down
 ```
 

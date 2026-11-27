@@ -179,6 +179,8 @@ def make_export(job, shorts, *, generate_cover=None, on_activity=None):
         }
         if "chapters" in short:
             metadata.update(chapters=short["chapters"], chapter_text=short["chapter_text"])
+        if short.get("highlight_review"):
+            metadata["highlight_review"] = short["highlight_review"]
         if short.get("description_context"):
             metadata["description_context"] = short["description_context"]
         if short.get("pauses_trimmed"):

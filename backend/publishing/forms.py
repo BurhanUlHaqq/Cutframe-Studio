@@ -70,6 +70,7 @@ class PublishOptionsForm(forms.Form):
     synthetic = forms.BooleanField(required=False)
     scheduled_at = forms.DateTimeField(required=False)
     confirm = forms.BooleanField()
+    highlight_reviewed = forms.BooleanField(required=False)
 
 
 class PublishForm(PostContentForm, DestinationForm, PublishOptionsForm):

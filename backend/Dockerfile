@@ -28,6 +28,7 @@ COPY manage.py ./
 COPY shorts_generator ./shorts_generator
 COPY studio ./studio
 COPY publishing ./publishing
+COPY downloads ./downloads
 
 USER studio
 EXPOSE 8000

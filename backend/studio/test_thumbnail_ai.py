@@ -28,6 +28,23 @@ def image(color):
 
 
 class AIThumbnailTests(TestCase):
+    def test_model_discovery_and_check_use_only_the_metadata_endpoint(self):
+        draft = {"provider": "compatible", "base_url": "http://host.docker.internal:8080/v1"}
+        metadata = {"data": [{"id": "local-cover"}]}
+        with patch("studio.thumbnail_ai.httpx.Client") as client:
+            get = client.return_value.__enter__.return_value.get
+            get.return_value = httpx.Response(200, json=metadata, request=httpx.Request("GET", draft["base_url"]))
+            models = self.client.post(reverse("thumbnail_ai_models"), draft, content_type="application/json")
+            self.assertEqual(models.json(), {"models": ["local-cover"]})
+            get.assert_called_once_with(draft["base_url"] + "/models", headers={})
+            check = self.client.post(reverse("thumbnail_ai_check"), {**draft, "model": "local-cover"},
+                                     content_type="application/json")
+            self.assertEqual(check.status_code, 200, check.content)
+            missing = self.client.post(reverse("thumbnail_ai_check"), {**draft, "model": "missing"},
+                                       content_type="application/json")
+            self.assertEqual(missing.status_code, 400, missing.content)
+        self.assertFalse(WorkspaceThumbnailSettings.objects.exists())
+
     def test_generation_and_regeneration_replace_zip_cover_and_keep_previous_image_on_failure(self):
         settings = reverse("thumbnail_ai_settings")
         self.client.get(reverse("session"))

@@ -367,6 +367,13 @@ export default function RenderDetails({ id }) {
               <Link className="secondary-button" href="/"><Plus size={17} aria-hidden="true" /> New render</Link>
             </div>
           </div>
+          {reel && <p className="muted">
+            {job.clips[0]?.highlight_review === "transcript" ? "Automatic screening covered spoken dialogue. "
+              : job.clips[0]?.highlight_review === "activity" ? "This reel was selected by visual activity. "
+              : "This reel requires a manual review. "}
+            Before posting, review the picture, audio, captions, title, description, and cover.
+            Confirm you have the rights to use the footage and music.
+          </p>}
           <div className={reel ? "reel-result" : "clip-grid"}>
             {job.clips.map((clip, index) => <ClipCard key={clip.video_url} reel={reel} gameplay={gameplay} clip={clip} index={index} ratio={job.aspect_ratio}
               publishUrl={`/publish?job=${job.id}&clip=${index}`}

@@ -10,7 +10,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from shorts_generator.reel import Moment, choose_moments, transcript_moments
+from shorts_generator.pipeline import NoMatchingHighlights
+from shorts_generator.reel import Moment, choose_moments, generate_highlight_reel, transcript_moments
 
 from .models import Job
 from .worker import process_next_job
@@ -23,13 +24,55 @@ class ReelPlannerTests(SimpleTestCase):
             {"start": 605, "end": 640, "text": "The final attempt succeeds and the result is shown."},
         ]
         responses = iter([
-            '{"moments":[{"start_time":8,"end_time":31,"title":"First attempt","score":80}]}',
-            '{"moments":[{"start_time":5,"end_time":41,"title":"Final attempt","score":100},'
+            '{"excluded_ranges":[],"moments":[{"start_time":8,"end_time":31,"title":"First attempt","score":80}]}',
+            '{"excluded_ranges":[],"moments":[{"start_time":5,"end_time":41,"title":"Final attempt","score":100},'
             '{"start_time":800,"end_time":850,"title":"Invented scene","score":100}]}',
         ])
         candidates = transcript_moments(segments, 700, 240, lambda _: next(responses), lambda *_: None)
         selected = choose_moments(candidates, 700, 90)
         self.assertEqual([(moment.start, moment.end) for moment in selected], [(7, 30), (605, 640)])
+
+    def test_exclusions_cover_whole_utterances_in_overlapping_sections(self):
+        segments = [
+            {"start": 580, "end": 594, "text": "The setup."},
+            {"start": 594, "end": 609, "text": "Content requiring exclusion."},
+            {"start": 610, "end": 640, "text": "A separate safe topic."},
+        ]
+        responses = iter([
+            '{"excluded_ranges":[],"moments":[{"start_time":580,"end_time":600,"title":"Setup","score":100}]}',
+            '{"excluded_ranges":[{"start_time":2,"end_time":5}],"moments":'
+            '[{"start_time":10,"end_time":40,"title":"Safe topic","score":70}]}',
+        ])
+        candidates = transcript_moments(segments, 700, 240, lambda _: next(responses), lambda *_: None)
+        self.assertEqual([(moment.start, moment.end) for moment in candidates], [(610, 640)])
+
+    def test_short_source_can_pass_transcript_screening(self):
+        segments = [{"start": 0, "end": 7, "text": "A complete short demonstration."}]
+        response = '{"excluded_ranges":[],"moments":[{"start_time":0,"end_time":7,"title":"Demo","score":90}]}'
+        candidates = transcript_moments(segments, 7, 7, lambda _: response, lambda *_: None)
+        self.assertEqual(choose_moments(candidates, 7, 7), [Moment(0, 7, "Demo", 90)])
+
+    def test_model_rejection_never_falls_back_to_motion(self):
+        segments = [{"start": 0, "end": 16, "text": "A spoken passage."}]
+        responses = [
+            '{"moments":[{"start_time":0,"end_time":16,"title":"Missing screening","score":100}]}',
+            '{"excluded_ranges":[{"start_time":0,"end_time":16}],"moments":[{"start_time":0,'
+            '"end_time":16,"title":"Excluded despite high score","score":100}]}',
+        ]
+        for response in responses:
+            with (self.subTest(response=response),
+                  patch("shorts_generator.reel.which", return_value="ffmpeg"),
+                  patch("shorts_generator.reel.prepare_source", return_value="source.mp4"),
+                  patch("shorts_generator.reel.validate_local_video", return_value=(30, True, {})),
+                  patch("shorts_generator.reel.transcribe_source", return_value={"segments": segments}),
+                  patch("shorts_generator.reel.ranking_client") as client,
+                  patch("shorts_generator.reel.activity_moments") as activity):
+                ranking = client.return_value
+                ranking.provider = "openai"
+                client.return_value.__enter__.return_value.return_value = response
+                with self.assertRaisesMessage(NoMatchingHighlights, "No usable moments passed transcript screening"):
+                    generate_highlight_reel("", out_dir=".", minutes=1, method="transcript", ranking=ranking)
+                activity.assert_not_called()
 
     def test_selection_respects_thirty_minute_budget_and_removes_duplicate_beats(self):
         moments = [Moment(index * 300, index * 300 + 180, f"Topic {index}", 90) for index in range(16)]
@@ -79,6 +122,7 @@ class HighlightStudioTests(TestCase):
             self.assertEqual(len(job.clips), 1)
             reel = job.clips[0]
             self.assertEqual(reel["title"], "Weekend match | Highlights")
+            self.assertEqual(reel["highlight_review"], "activity")
             self.assertLessEqual(reel["end_time"], 60)
             self.assertGreaterEqual(len(reel["chapters"]), 3)
             self.assertTrue(reel["chapter_text"].startswith("00:00 "), reel["chapters"])

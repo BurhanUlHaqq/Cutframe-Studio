@@ -28,7 +28,8 @@ class DescriptionTests(TestCase):
         result = self.client.post(settings_url, {"model": "writing-fixture", "automatic": True}, content_type="application/json")
         self.assertEqual(result.json()["connection"]["model"], "writing-fixture")
         self.assertEqual(WorkspaceAISettings.objects.get(pk=self.owner).config, self.config)
-        self.assertEqual(Client().get(settings_url).json()["settings"], {"model": "", "automatic": False})
+        self.assertEqual(Client().get(settings_url).json()["settings"],
+                         {"provider": "", "base_url": "", "model": "", "automatic": False})
         clip = {"name": "clip-01", "title": "The final rally", "description": "The original description.", "has_captions": True}
         job = Job.objects.create(owner=self.owner, clip_count=1, status=Job.Status.COMPLETE, clips=[clip], language="en")
         with TemporaryDirectory() as temporary, override_settings(STUDIO_DATA_DIR=Path(temporary)):
@@ -49,6 +50,37 @@ class DescriptionTests(TestCase):
             self.assertIn("Which shot would you take?\n\n#CrosscourtReturn #TableTennis", result.json()["description"])
             self.assertNotIn("FYP", result.json()["description"])
             self.assertEqual(Job.objects.get(pk=job.id).clips[0]["description"], clip["description"])
+
+    def test_independent_writer_connection_is_used_for_discovery_and_renders(self):
+        settings_url = reverse("description_settings")
+        credentials = {"provider": "compatible", "base_url": "http://host.docker.internal:11434/v1",
+                       "model": "writer-local", "api_key": "writer-secret", "automatic": True}
+        result = self.client.post(settings_url, credentials, content_type="application/json")
+        self.assertEqual(result.status_code, 200, result.content)
+        self.assertTrue(result.json()["has_key"])
+        self.assertNotIn("writer-secret", result.content.decode())
+        row = WorkspaceAISettings.objects.get(pk=self.owner)
+        self.assertEqual(row.config, self.config)
+        self.assertNotIn("writer-secret", str(row.description_connection))
+
+        model_list = reverse("ai_models") + "?task=descriptions"
+        with patch("studio.views.list_ranking_models", return_value=["writer-local"]) as discover:
+            models = self.client.post(model_list, {}, content_type="application/json")
+        self.assertEqual(models.json(), {"models": ["writer-local"]})
+        self.assertEqual(discover.call_args.args[0].base_url, credentials["base_url"])
+
+        job = Job(owner=self.owner, language="en")
+        clips = [{"title": "Rally", "clip_url": "fixture.mp4", "description": "Original"}]
+        with patch("studio.worker.generate_descriptions", return_value={0: "Updated"}) as write:
+            enrich_descriptions(job, clips, self.config, {}, Mock())
+        self.assertEqual(write.call_args.args[0].model, credentials["model"])
+        self.assertEqual(write.call_args.args[0].api_key, credentials["api_key"])
+        self.assertEqual(clips[0]["description"], "Updated")
+
+        inherited = self.client.post(settings_url, {"provider": "", "model": ""}, content_type="application/json")
+        self.assertEqual(inherited.json()["connection"]["model"], self.config["model"])
+        row.refresh_from_db()
+        self.assertEqual(row.description_connection, {})
 
     def test_worker_batches_opt_in_copy_and_keeps_fallback_after_provider_failure(self):
         job = Job(owner=self.owner, language="en")

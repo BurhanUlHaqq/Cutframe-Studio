@@ -74,8 +74,8 @@ export function HighlightOptions({ value, onChange, showShared = false }) {
         {showShared && <SelectField label="Output quality" value={value.quality} choices={qualities}
           onChange={(next) => onChange({ quality: next })} />}
       </div>
-      <small>{value.highlight_method === "activity" ? "Uses motion across the source. Works without a ranking provider."
-        : "Uses the configured ranking model to find complete story beats. Falls back to visual activity when dialogue or a configured model is unavailable."}</small>
+      <small>{value.highlight_method === "activity" ? "Uses motion across the source. Review the finished reel for content and rights before posting."
+        : "Screens spoken dialogue while finding complete story beats. Uses visual activity when speech or a configured model is unavailable."}</small>
       {showShared && (
         <div className="options highlight-production">
           <SelectField label="Captions" value={value.caption_style} choices={captionStyles}

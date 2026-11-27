@@ -1,146 +1,124 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, Image, Save } from "lucide-react";
-import { api, submit } from "../api";
+import { useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { SelectField } from "../render-options";
+import { ModelActions, ModelLoadState, ModelRecommendations, SavedModel, useModelDraft } from "./model-controls";
 
-const endpoint = "thumbnail-ai-settings/";
-const providers = [["", "Choose a provider"], ["openai", "OpenAI"], ["compatible", "OpenAI-compatible image server"]];
-const qualityLevels = [["low", "Low"], ["medium", "Medium"], ["high", "High"]];
-const customModel = "__custom__";
+const route = "thumbnail-ai-settings/";
+const localImageUrl = "http://host.docker.internal:8080/v1";
+const providers = [["", "Frame covers only"], ["openai", "OpenAI"], ["compatible", "OpenAI-compatible image server"]];
+const recommendationChoices = [
+  {
+    name: "LocalAI with FLUX.1 schnell", provider: "compatible", base_url: localImageUrl, model: "flux.1-schnell",
+    detail: "Install an image model in LocalAI. Use the exact model ID listed by your server.",
+    url: "https://localai.io/docs/models/capabilities/vision/image-generation/",
+  },
+  {
+    name: "OpenAI for cover artwork", provider: "openai", base_url: "", model: "gpt-image-2.6-flare",
+    detail: "Cloud image generation for iterating on covers. Each generated image uses your provider credit.",
+    url: "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
+  },
+];
 
-export default function ThumbnailAISettings() {
-  const [data, setData] = useState(null);
-  const [draft, setDraft] = useState({});
-  const [custom, setCustom] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    const abort = new AbortController();
-    api(endpoint, { signal: abort.signal }).then(setData).catch((failure) => {
-      if (!abort.signal.aborted) setError(failure.message);
-    });
-    return () => abort.abort();
-  }, [attempt]);
-
-  const values = { ...data?.settings, ...draft };
-  const defaultModel = data?.openai_models[0];
+export default function ThumbnailAISettings({ resource }) {
+  const form = useModelDraft(resource);
+  const [models, setModels] = useState(null);
+  const [filter, setFilter] = useState("");
+  const { data } = resource;
+  const { values } = form;
+  if (!data) return <ModelLoadState resource={resource} label="thumbnail model" />;
   const openAI = values.provider === "openai";
-  const knownModel = data?.openai_models.includes(values.model);
-  const manualModel = !openAI || custom || !knownModel;
-  const savedKey = data?.has_key && values.provider === data.settings.provider &&
-    values.base_url === data.settings.base_url && !values.remove_key;
-  const changed = data && (Object.keys(data.settings).some((key) => values[key] !== data.settings[key]) ||
-    values.api_key || values.remove_key);
+  const previous = data.settings;
+  const hasKey = data.has_key && values.provider === previous.provider &&
+    values.base_url === previous.base_url && !values.remove_key;
+  const available = models ?? (openAI ? data.openai_models : []);
+  const matching = available.filter((model) => model.toLowerCase().includes(filter.trim().toLowerCase()));
+  const detail = previous.provider ? data.ready ? previous.provider === "openai" ? "OpenAI" : "Image server"
+    : "Connection setup needed" : "AI generation off";
 
-  function change(next) {
-    setDraft((previous) => ({ ...previous, ...next }));
-    setSaved(false);
-    setError("");
-  }
-
-  function chooseProvider(provider) {
-    setCustom(false);
-    change({
-      provider, model: provider === data.settings.provider ? data.settings.model : provider === "openai" ? defaultModel : "",
-      base_url: provider === data.settings.provider ? data.settings.base_url : "", api_key: "", remove_key: false,
-    });
-  }
-
-  async function save(event) {
-    event.preventDefault();
-    if (!changed || saving) return;
-    setSaving(true);
-    setError("");
-    try {
-      setData(await submit(endpoint, values));
-      setDraft({});
-      setSaved(true);
-    } catch (failure) {
-      setError(Object.values(failure.fields || {})[0]?.[0]?.message || failure.message);
-    } finally {
-      setSaving(false);
+  function applyConnection(fields) {
+    const endpointChanged = fields.provider !== values.provider || fields.base_url !== values.base_url;
+    form.change({ ...fields, ...(endpointChanged ? { api_key: "", remove_key: false } : {}) });
+    if (endpointChanged) {
+      setModels(null);
+      setFilter("");
     }
   }
 
-  return (
-    <section className="panel settings-panel" aria-labelledby="thumbnail-ai-settings-title">
-      <div className="panel-heading">
-        <span className="heading-icon"><Image size={21} aria-hidden="true" /></span>
-        <div><h2 id="thumbnail-ai-settings-title" tabIndex={-1}>Thumbnails</h2>
-          <p>Choose the image model that creates artwork for your short clips and highlights.</p></div>
-      </div>
-      {!data ? (error ? <><p className="field-error" role="alert">{error}</p>
-        <button className="secondary-button settings-retry" type="button"
-          onClick={() => { setError(""); setAttempt((n) => n + 1); }}>Try again</button></> :
-        <p className="muted" role="status">Loading thumbnail settings…</p>) : (
-        <form onSubmit={save}>
-          <fieldset className="control-group" disabled={saving}>
-            <legend className="sr-only">Thumbnail model configuration</legend>
-            <div className="ai-fields">
-              <SelectField label="Image provider" value={values.provider} choices={providers} onChange={chooseProvider} />
-              {openAI && <SelectField label="Image model" value={manualModel ? customModel : values.model}
-                choices={[...data.openai_models.map((model) => [model, model]), [customModel, "Enter a model ID"]]}
-                onChange={(model) => {
-                  setCustom(model === customModel);
-                  change({ model: model === customModel ? "" : model });
-                }} />}
-              {values.provider === "compatible" && <div>
-                <label htmlFor="thumbnail-base-url">Image API base URL</label>
-                <div className="input-wrap"><input id="thumbnail-base-url" value={values.base_url} maxLength={500}
-                  placeholder="http://host.docker.internal:7860/v1" inputMode="url" spellCheck={false} required
-                  onChange={(event) => change({ base_url: event.target.value })} /></div>
-                <small className="ai-help">Use a server that supports the OpenAI Images API and returns inline image data.</small>
-              </div>}
-              {values.provider && manualModel && <div>
-                <label htmlFor="thumbnail-model-id">Image model ID</label>
-                <div className="input-wrap"><input id="thumbnail-model-id" value={values.model} maxLength={200}
-                  placeholder="Model ID from your image provider" spellCheck={false} required
-                  onChange={(event) => change({ model: event.target.value })} /></div>
-              </div>}
-              {values.provider && <div>
-                <label htmlFor="thumbnail-api-key">Image API key</label>
-                <div className="input-wrap"><input id="thumbnail-api-key" value={values.api_key || ""} maxLength={1000}
-                  type="password" autoComplete="new-password" placeholder={savedKey ? "Saved credential" : "Optional"}
-                  onChange={(event) => change({ api_key: event.target.value, remove_key: false })} /></div>
-                <small className="ai-help">{openAI ? "Leave blank to use the OpenAI key saved under AI models." :
-                  "Leave blank if your server allows unauthenticated requests."}</small>
-                {savedKey && <button className="secondary-button ai-remove-key" type="button"
-                  onClick={() => change({ api_key: "", remove_key: true })}>Remove saved key</button>}
-                {values.remove_key && <small className="ai-help">Save to remove the stored key.</small>}
-              </div>}
-              {openAI && <SelectField label="Image quality" value={values.quality} choices={qualityLevels}
-                onChange={(quality) => change({ quality })} />}
-            </div>
-            {values.provider && <label className="preference-check">
-              <input type="checkbox" checked={values.automatic}
-                onChange={(event) => change({ automatic: event.target.checked })} />
-              <span>Automatically generate covers for new renders<small>Uses one image generation per finished video.</small></span>
-            </label>}
-            {values.provider && values.automatic && <div className="thumbnail-cover-limit">
-              <label htmlFor="automatic-cover-limit">Maximum automatic covers per render</label>
-              <div className="input-wrap"><input id="automatic-cover-limit" type="number" min={1} step={1}
-                value={values.automatic_limit ?? ""} placeholder="Every video"
-                onChange={(event) => change({ automatic_limit: event.target.value === "" ? null : Number(event.target.value) })} /></div>
-              <small className="ai-help">Leave blank for every video. Videos beyond the limit use frame covers.</small>
-            </div>}
-          </fieldset>
-          <div className="settings-actions">
-            <div className="settings-feedback">
-              {error && <p className="field-error" role="alert">{error}</p>}
-              {saved && <p className="settings-saved" role="status"><Check size={17} aria-hidden="true" /> Thumbnail settings saved.</p>}
-              {!changed && openAI && !data.ready && <p className="ai-help">Save an OpenAI key to generate covers.</p>}
-            </div>
-            <button className="primary-button" disabled={!changed || saving}>
-              <Save size={17} aria-hidden="true" /> {saving ? "Saving…" : "Save thumbnail settings"}
+  function chooseProvider(provider) {
+    applyConnection({ provider, model: provider === previous.provider ? previous.model : provider === "openai" ? data.openai_models[0] : "",
+      base_url: provider === previous.provider ? previous.base_url : "" });
+  }
+
+  return <>
+    <SavedModel model={previous.provider ? previous.model || "Choose a model" : "Frame covers"} detail={detail} />
+    <form onSubmit={(event) => { event.preventDefault(); if (form.changed) form.run("save", route, values); }}>
+      <fieldset className="control-group model-config" disabled={Boolean(form.busy)}>
+        <legend className="sr-only">Thumbnail model configuration</legend>
+        <div className="ai-fields">
+          <SelectField label="Image connection" value={values.provider} choices={providers} onChange={chooseProvider} />
+          {values.provider && <div>
+            <label htmlFor="thumbnail-model-id">Image model ID</label>
+            <div className="input-wrap"><input id="thumbnail-model-id" value={values.model} maxLength={200}
+              placeholder="Enter or load a model ID" spellCheck={false} required
+              onChange={(event) => form.change({ model: event.target.value })} /></div>
+          </div>}
+          {values.provider === "compatible" && <div>
+            <label htmlFor="thumbnail-base-url">Image API base URL</label>
+            <div className="input-wrap"><input id="thumbnail-base-url" value={values.base_url} maxLength={500}
+              placeholder={localImageUrl} inputMode="url" spellCheck={false} required
+              onChange={(event) => applyConnection({ provider: values.provider, base_url: event.target.value })} /></div>
+            <small className="ai-help">The server must support /images/generations and return inline image data.</small>
+          </div>}
+          {values.provider && <div>
+            <label htmlFor="thumbnail-api-key">Image API key</label>
+            <div className="input-wrap"><input id="thumbnail-api-key" value={values.api_key || ""} maxLength={1000}
+              type="password" autoComplete="new-password" placeholder={hasKey ? "Saved credential" : "Enter provider key"}
+              onChange={(event) => { form.change({ api_key: event.target.value, remove_key: false }); setModels(null); }} /></div>
+            <small className="ai-help">{openAI ? "Leave blank to use the saved OpenAI text credential, if available."
+              : "Optional when the server accepts unauthenticated requests."}</small>
+            {hasKey && <button className="secondary-button ai-remove-key" type="button"
+              onClick={() => { form.change({ api_key: "", remove_key: true }); setModels(null); }}>Remove saved key</button>}
+            {values.remove_key && <small className="ai-help">Save to remove the stored key.</small>}
+          </div>}
+          {openAI && <SelectField label="Image quality" value={values.quality}
+            choices={[["low", "Low"], ["medium", "Medium"], ["high", "High"]]}
+            onChange={(quality) => form.change({ quality })} />}
+        </div>
+        {values.provider && <div className="model-picker">
+          <div className="model-picker-controls">
+            <button className="secondary-button" type="button"
+              onClick={() => form.run("models", route + "models/", values, (result) => { setModels(result.models); setFilter(""); })}>
+              <RefreshCw size={16} aria-hidden="true" /> {form.busy === "models" ? "Loading models…" : models ? "Refresh models" : "Load models"}
             </button>
           </div>
-        </form>
-      )}
-    </section>
-  );
+          {available.length > 12 && <div className="input-wrap">
+            <input type="search" aria-label="Filter image models" placeholder="Filter image models" value={filter}
+              onChange={(event) => setFilter(event.target.value)} />
+          </div>}
+          {available.length > 0 && <SelectField label={models ? "Available server models" : "OpenAI image models"}
+            value={matching.includes(values.model) ? values.model : ""}
+            choices={[["", matching.length ? "Choose a model" : "No matches"], ...matching.map((model) => [model, model])]}
+            onChange={(model) => { if (model) form.change({ model }); }} />}
+          {models?.length === 0 && <small className="ai-help" role="status">The server reported no models. Enter its image model ID directly.</small>}
+        </div>}
+        <ModelRecommendations choices={recommendationChoices} apply={applyConnection} />
+        {values.provider && <label className="preference-check">
+          <input type="checkbox" checked={values.automatic}
+            onChange={(event) => form.change({ automatic: event.target.checked })} />
+          <span>Automatically generate covers for new renders<small>Uses one image generation per finished video.</small></span>
+        </label>}
+        {values.provider && values.automatic && <div className="thumbnail-cover-limit">
+          <label htmlFor="automatic-cover-limit">Maximum automatic covers per render</label>
+          <div className="input-wrap"><input id="automatic-cover-limit" type="number" min={1} step={1}
+            value={values.automatic_limit ?? ""} placeholder="Every video"
+            onChange={(event) => form.change({ automatic_limit: event.target.value === "" ? null : Number(event.target.value) })} /></div>
+          <small className="ai-help">Videos beyond the limit use frame covers.</small>
+        </div>}
+      </fieldset>
+      <ModelActions form={form} label="Save thumbnail settings"
+        onCheck={values.provider && (() => form.run("check", route + "check/", values))} />
+    </form>
+  </>;
 }

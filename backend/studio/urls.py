@@ -5,6 +5,7 @@ from . import library, views
 urlpatterns = [
     path("api/health/", views.health, name="health"),
     path("api/publishing/", include("publishing.urls")),
+    path("api/downloads/", include("downloads.urls")),
     path("api/session/", views.session, name="session"),
     path("api/preferences/", views.preferences, name="preferences"),
     path("api/storage-settings/", views.storage_settings, name="storage_settings"),
@@ -13,6 +14,8 @@ urlpatterns = [
     path("api/ai-settings/models/", views.ai_connection, {"discover": True}, name="ai_models"),
     path("api/description-settings/", views.description_settings, name="description_settings"),
     path("api/thumbnail-ai-settings/", views.thumbnail_ai_settings, name="thumbnail_ai_settings"),
+    path("api/thumbnail-ai-settings/check/", views.thumbnail_ai_connection, name="thumbnail_ai_check"),
+    path("api/thumbnail-ai-settings/models/", views.thumbnail_ai_connection, {"discover": True}, name="thumbnail_ai_models"),
     path("api/library/", library.library, name="render_library"),
     path("api/library/delete/", library.delete_renders, name="delete_renders"),
     path("api/library/clear-work/", library.delete_renders, {"work_only": True}, name="clear_render_work"),

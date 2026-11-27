@@ -93,6 +93,23 @@ class AISettingsTests(TestCase):
         self.assertNotIn("secret", WorkspaceAISettings.objects.get().config)
         self.assertEqual(resolve_ai_options({"provider": "openai"}).api_key, "test-openai-key")
 
+    def test_transcription_tab_saves_without_changing_ranking_profiles(self):
+        url = reverse("ai_settings")
+        word_options = {"whisper_model": "small", "whisper_device": "cpu", "whisper_vad": "on"}
+        scoped = self.client.post(url + "?scope=installation&task=transcription", word_options,
+                                  content_type="application/json")
+        self.assertEqual(scoped.status_code, 200, scoped.content)
+        self.assertEqual(scoped.json()["connection"]["model"], "installation-model")
+        self.assertEqual(scoped.json()["connection"]["key_source"], "saved")
+
+        self.client.post(url, self.local, content_type="application/json")
+        written = self.client.post(url + "?task=transcription", {"whisper_device": "cuda"},
+                                   content_type="application/json")
+        self.assertEqual(written.json()["settings"]["whisper_device"], "cuda")
+        self.assertEqual(written.json()["connection"]["base_url"], self.local["base_url"])
+        rank = self.client.post(url, {"model": "new-ranker"}, content_type="application/json")
+        self.assertEqual(rank.json()["settings"]["whisper_device"], "cuda")
+
     def test_ai_settings_are_csrf_protected_and_validate_endpoints(self):
         client = Client(enforce_csrf_checks=True)
         url = reverse("ai_settings")

@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { Clipboard, Download, ExternalLink } from "lucide-react";
 import { platforms } from "./platforms";
 
-export default function TikTokStudio({ clip, caption, onCaption }) {
+export default function TikTokStudio({ clip, reel, caption, onCaption }) {
   const [feedback, setFeedback] = useState("");
   const field = useRef(null);
 
@@ -42,6 +42,7 @@ export default function TikTokStudio({ clip, caption, onCaption }) {
         <div className="tiktok-studio-upload">
           <h3>Upload your video</h3>
           <p className="muted">Download the MP4, then upload it and paste your caption in TikTok Studio. Choose the cover and visibility there before posting.</p>
+          {reel && <p className="muted">Review the entire reel, its caption and cover against TikTok’s guidelines, and confirm you have the rights to post it.</p>}
           <div className="publish-buttons">
             {clip && <a className="secondary-button" href={`${clip.video_url}?download=1`}>
               <Download size={16} aria-hidden="true" /> Download MP4

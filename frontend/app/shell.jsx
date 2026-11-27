@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Clapperboard, LibraryBig, Plus, Scissors, Send, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, Clapperboard, Download, LibraryBig, Plus, Scissors, Send, Settings } from "lucide-react";
 import { settingsSections, useSettingsSection } from "./settings/sections";
 
 export default function Shell({ children }) {
@@ -13,6 +13,7 @@ export default function Shell({ children }) {
   const onRender = pathname.startsWith("/jobs/");
   const alternate = onRender && pathname.endsWith("/alternate");
   const onLibrary = pathname === "/library";
+  const onDownloads = pathname === "/downloads";
   const onPublish = pathname === "/publish";
   const section = useSettingsSection();
   const [settingsOpen, setSettingsOpen] = useState(null);
@@ -33,6 +34,10 @@ export default function Shell({ children }) {
           <Link href="/library" className={onLibrary || onRender ? "nav-item current" : "nav-item"}
             aria-current={onLibrary ? "page" : undefined}>
             <LibraryBig size={18} aria-hidden="true" /><span>Library</span>
+          </Link>
+          <Link href="/downloads" className={onDownloads ? "nav-item current" : "nav-item"}
+            aria-current={onDownloads ? "page" : undefined}>
+            <Download size={18} aria-hidden="true" /><span>Downloader</span>
           </Link>
           <Link href="/publish" className={onPublish ? "nav-item current" : "nav-item"}
             aria-current={onPublish ? "page" : undefined}>

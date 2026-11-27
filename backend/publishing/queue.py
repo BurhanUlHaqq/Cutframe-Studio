@@ -11,7 +11,7 @@ from django.utils import timezone
 from filelock import Timeout
 
 from studio.exports import render_lock
-from studio.models import Job
+from studio.models import Job, StudioMode
 
 from .config import PublishError, client_config, publishing_settings
 from .models import Connection, Platform, Publication, PublicationBatch
@@ -34,6 +34,8 @@ def destination_account(connection, config, account_id):
 
 
 def prepare_post(job, fields, account, send_time):
+    if job.studio_mode == StudioMode.HIGHLIGHTS and not fields.get("highlight_reviewed"):
+        raise QueueError("Review the highlight reel and confirm you have the rights to post it.")
     platform = fields["platform"]
     index = fields["clip_index"]
     try:
@@ -63,6 +65,8 @@ def prepare_post(job, fields, account, send_time):
             options["caption"] = "\n\n".join(filter(None, (options["caption"], chapters)))
         if len(options["caption"].encode("utf-8")) > 5000:
             raise QueueError("Keep the YouTube description and any chapter timestamps within 5,000 bytes.")
+    if job.studio_mode == StudioMode.HIGHLIGHTS:
+        options["highlight_reviewed"] = True
     options.update(cover_options(job, index, platform))
     return {"owner": job.owner, "job": job, "clip_index": index, "platform": platform,
             "account_id": account["id"], "account_label": account["label"][:180], "options": options,

@@ -36,7 +36,7 @@ SESSION_COOKIE_SECURE = CSRF_COOKIE_SECURE = os.getenv("DJANGO_SECURE_COOKIES", 
 ROOT_URLCONF = "studio.urls"
 WSGI_APPLICATION = "studio.wsgi.application"
 
-INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.sessions", "studio", "publishing"]
+INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.sessions", "studio", "publishing", "downloads"]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

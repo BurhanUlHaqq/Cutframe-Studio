@@ -28,6 +28,7 @@ export default function BulkComposer({ jobs, loadError, onRetry, destinations, i
   const requestId = useRef(null);
 
   const chosen = Object.entries(selection);
+  const includesReels = chosen.some(([, row]) => row.reel);
   const pickedTargets = destinations.filter((target) => targets.includes(targetKey(target)));
   const postCount = pickedTargets.length * chosen.length;
   const maxClips = Math.min(clipLimit, Math.floor(batchLimit / Math.max(1, pickedTargets.length)));
@@ -59,7 +60,7 @@ export default function BulkComposer({ jobs, loadError, onRetry, destinations, i
     const next = { ...selection };
     for (const { key, job, index, clip } of items.slice(0, maxClips - chosen.length)) {
       next[key] = { job_id: job.id, clip_index: index, title: clip.title.slice(0, 100),
-                    caption: clip.description, original: clip.title };
+                    caption: clip.description, original: clip.title, reel: job.studio_mode === "highlights" };
     }
     setSelection(next);
   }
@@ -88,7 +89,7 @@ export default function BulkComposer({ jobs, loadError, onRetry, destinations, i
     try {
       requestId.current ||= crypto.randomUUID();
       const result = await submit("publishing/posts/bulk/", {
-        request_id: requestId.current, confirm: true,
+        request_id: requestId.current, confirm: true, highlight_reviewed: includesReels,
         clips: chosen.map(([, { job_id, clip_index, title, caption }]) => ({ job_id, clip_index, title, caption })),
         destinations: pickedTargets.map(({ platform, id }) => ({ platform, account_id: id })),
         privacy: youtube ? options.privacy : "", made_for_kids: youtube ? options.made_for_kids : "",
@@ -159,6 +160,7 @@ export default function BulkComposer({ jobs, loadError, onRetry, destinations, i
                   <summary><span><strong>{row.title || row.original}</strong><small>{validStart ? (
                     dateFormat.format(new Date(start.getTime() + index * spacing * 60_000))
                   ) : spacing && index ? `${index * spacing} min after the first video` : "Send when ready"}</small></span></summary>
+                  {row.reel && <a href={`/jobs/${row.job_id}`} target="_blank" rel="noreferrer">Review reel (new tab)</a>}
                   <label htmlFor={`${field}-${key}-title`}>Title</label>
                   <div className="input-wrap"><input id={`${field}-${key}-title`} required maxLength={100} value={row.title}
                     onChange={(event) => changeCopy(key, { title: event.target.value })} /></div>
@@ -174,7 +176,9 @@ export default function BulkComposer({ jobs, loadError, onRetry, destinations, i
           {(issue || error) && <p className="field-error" role="alert">{issue || error}</p>}
           {postCount > 0 && <label className="publish-check">
             <input type="checkbox" required checked={options.confirm} onChange={(event) => change({ confirm: event.target.checked })} />
-            <span>I approve {postCount} {postCount === 1 ? "delivery" : "deliveries"} to {pickedTargets.map(({ label, platform }) => `${label} on ${platforms[platform].name}`).join(", ")}.</span>
+            <span>I approve {postCount} {postCount === 1 ? "delivery" : "deliveries"} to {pickedTargets.map(({ label, platform }) => `${label} on ${platforms[platform].name}`).join(", ")}.
+              {includesReels && " I’ve reviewed every highlight reel’s picture, audio, captions, title, description, and cover against each destination’s guidelines, and I have the rights to post them."}
+            </span>
           </label>}
         </fieldset>
         <div className="settings-actions bulk-footer">

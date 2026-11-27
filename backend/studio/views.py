@@ -23,11 +23,12 @@ from shorts_generator.local.cover_design import CoverDesignError, design_cover
 from shorts_generator.local.thumbnails import create_thumbnail_set
 
 from .ai_settings import (
-    AISettingsForm, ModelDiscoveryForm, ai_settings_data, installation_ai, installation_options,
-    merge_ai_options, merge_installation, resolve_ai_options, saved_ai_options,
+    AISettingsForm, ModelDiscoveryForm, TranscriptionSettingsForm, ai_settings_data,
+    installation_ai, installation_options, merge_ai_options, merge_installation, resolve_ai_options, saved_ai_options,
 )
-from .descriptions import (DescriptionDraftForm, DescriptionError, DescriptionSettingsForm, connection_info,
-                           generate_descriptions, saved_description_options, subtitle_excerpt, writer_config)
+from .descriptions import (DescriptionDiscoveryForm, DescriptionDraftForm, DescriptionError,
+                           DescriptionSettingsForm, connection_info, generate_descriptions,
+                           saved_description_options, subtitle_excerpt, writer_config)
 from .exports import (clip_text, job_directory, open_archive, open_published_video, publication_filename, render_lock,
                       save_thumbnail_content, set_ai_thumbnail, store_thumbnail_options, thumbnail_filename,
                       thumbnail_reference)
@@ -35,7 +36,8 @@ from .forms import AlternateRenderForm, ClipTextForm, JobForm, PreferencesForm, 
 from .models import (InstallationSettings, PREFERENCE_FIELDS, RENDER_OPTIONS, Job, StudioMode,
                      WorkspaceAISettings, WorkspacePreferences, WorkspaceThumbnailSettings)
 from .thumbnail_ai import (DEFAULTS as THUMBNAIL_DEFAULTS, ThumbnailAISettingsForm, ThumbnailGenerationError,
-                           ThumbnailGenerationForm, image_provider, make_ai_cover, merge_thumbnail_ai,
+                           ThumbnailDiscoveryForm, ThumbnailGenerationForm, image_provider, list_image_models,
+                           make_ai_cover, merge_thumbnail_ai,
                            saved_thumbnail_ai, thumbnail_settings_data)
 from .uploads import MIB, VIDEO_EXTENSIONS, source_available, store_upload, upload_limit
 
@@ -173,26 +175,38 @@ def preferences(request):
 @never_cache
 def ai_settings(request):
     global_scope = request.GET.get("scope") == "installation"
+    transcription = request.GET.get("task") == "transcription"
     if global_scope and request.method == "POST":
         with transaction.atomic():
             row, _ = InstallationSettings.objects.select_for_update().get_or_create(pk=1)
-            data, error = form_data(request, AISettingsForm, defaults=installation_options(row.ai), installation=row.ai)
+            if transcription:
+                data, error = form_data(request, TranscriptionSettingsForm, defaults=row.ai)
+            else:
+                data, error = form_data(request, AISettingsForm, defaults=installation_options(row.ai), installation=row.ai)
             if error is not None:
                 return error
-            row.ai = merge_installation(row.ai, data)
+            row.ai = row.ai | data if transcription else merge_installation(row.ai, data)
             row.save(update_fields=["ai"])
         return JsonResponse(ai_settings_data(installation_options(row.ai), row.ai, global_scope=True))
 
     installation = installation_ai()
     if global_scope:
         return JsonResponse(ai_settings_data(installation_options(installation), installation, global_scope=True))
-    options = saved_ai_options(request.session.get("studio_owner"))
+    owner = request.session.get("studio_owner")
+    options = saved_ai_options(owner)
     if request.method == "POST":
-        data, error = form_data(request, AISettingsForm, defaults=options, installation=installation)
-        if error is not None:
-            return error
-        options = merge_ai_options(data, options)
-        WorkspaceAISettings.objects.update_or_create(owner=ensure_owner(request), defaults={"config": options})
+        with transaction.atomic():
+            if owner:
+                row = WorkspaceAISettings.objects.select_for_update().filter(pk=owner).first()
+                options = row.config if row else {}
+            if transcription:
+                data, error = form_data(request, TranscriptionSettingsForm, defaults=options)
+            else:
+                data, error = form_data(request, AISettingsForm, defaults=options, installation=installation)
+            if error is not None:
+                return error
+            options = options | data if transcription else merge_ai_options(data, options)
+            WorkspaceAISettings.objects.update_or_create(owner=ensure_owner(request), defaults={"config": options})
     return JsonResponse(ai_settings_data(options, installation))
 
 
@@ -201,18 +215,26 @@ def ai_settings(request):
 def ai_connection(request, *, discover=False):
     installation = installation_ai()
     global_scope = request.GET.get("scope") == "installation"
-    saved = installation_options(installation) if global_scope else saved_ai_options(request.session.get("studio_owner"))
-    data, error = form_data(request, ModelDiscoveryForm if discover else AISettingsForm, defaults=saved,
-                            installation=installation)
+    descriptions = request.GET.get("task") == "descriptions"
+    owner = request.session.get("studio_owner")
+    ranking = saved_ai_options(owner)
+    if descriptions:
+        saved = saved_description_options(owner)
+        form = DescriptionDiscoveryForm if discover else DescriptionSettingsForm
+    else:
+        saved = installation_options(installation) if global_scope else ranking
+        form = ModelDiscoveryForm if discover else AISettingsForm
+    data, error = form_data(request, form, defaults=saved, installation=installation)
     if error is not None:
         return error
     try:
-        if global_scope:
+        if descriptions:
+            config = writer_config(merge_ai_options(data, saved), ranking, installation)
+        elif global_scope:
             installation = merge_installation(installation, data)
-            options = installation_options(installation)
+            config = resolve_ai_options(installation_options(installation), installation)
         else:
-            options = merge_ai_options(data, saved)
-        config = resolve_ai_options(options, installation)
+            config = resolve_ai_options(merge_ai_options(data, saved), installation)
         if discover:
             return JsonResponse({"models": list_ranking_models(config)})
         check_connection(config)
@@ -238,22 +260,32 @@ def ai_connection(request, *, discover=False):
 def description_settings(request):
     owner = request.session.get("studio_owner")
     options = saved_description_options(owner)
+    installation = installation_ai()
     if request.method == "POST":
-        options, error = form_data(request, DescriptionSettingsForm, defaults=options)
-        if error is not None:
-            return error
-        owner = ensure_owner(request)
-        WorkspaceAISettings.objects.update_or_create(owner=owner, defaults={
-            "description_model": options["model"], "description_automatic": options["automatic"],
-        })
+        with transaction.atomic():
+            if owner:
+                WorkspaceAISettings.objects.select_for_update().filter(pk=owner).first()
+                options = saved_description_options(owner)
+            data, error = form_data(request, DescriptionSettingsForm, defaults=options, installation=installation)
+            if error is not None:
+                return error
+            updated = merge_ai_options(data, options)
+            profile = {key: updated[key] for key in ("provider", "base_url", "secret") if key in updated}
+            owner = ensure_owner(request)
+            WorkspaceAISettings.objects.update_or_create(owner=owner, defaults={
+                "description_model": data["model"], "description_automatic": data["automatic"],
+                "description_connection": profile if data["provider"] else {},
+            })
+            options = profile | {"model": data["model"], "automatic": data["automatic"]}
     connection = None
     try:
-        config = writer_config(options, saved_ai_options(owner))
+        config = writer_config(options, saved_ai_options(owner), installation)
         config.validate()
         connection = connection_info(config)
     except RankingConfigurationError:
         pass
-    return JsonResponse({"settings": options, "connection": connection})
+    return JsonResponse({"settings": {key: options[key] for key in ("provider", "model", "base_url", "automatic")},
+                         "connection": connection, "has_key": bool(options.get("secret"))})
 
 
 @require_http_methods(["GET", "POST"])
@@ -269,6 +301,29 @@ def thumbnail_ai_settings(request):
         options = merge_thumbnail_ai(data, options)
         WorkspaceThumbnailSettings.objects.update_or_create(owner=owner, defaults={"config": options})
     return JsonResponse(thumbnail_settings_data(owner, options))
+
+
+@require_POST
+@never_cache
+def thumbnail_ai_connection(request, *, discover=False):
+    owner = request.session.get("studio_owner")
+    saved = saved_thumbnail_ai(owner)
+    form = ThumbnailDiscoveryForm if discover else ThumbnailAISettingsForm
+    data, error = form_data(request, form, defaults=THUMBNAIL_DEFAULTS | saved)
+    if error is not None:
+        return error
+    if not data["provider"]:
+        return JsonResponse({"error": "Choose an image provider first."}, status=400)
+    try:
+        provider = image_provider(owner, merge_thumbnail_ai(data, saved))
+        models = list_image_models(provider)
+        if discover:
+            return JsonResponse({"models": models})
+        if provider.model not in models:
+            raise ThumbnailGenerationError("The selected image model is missing from the server’s model list.")
+    except ThumbnailGenerationError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse({"message": "The selected model is visible to Cutframe."})
 
 
 @require_http_methods(["GET", "POST"])
