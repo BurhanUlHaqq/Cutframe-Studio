@@ -11,6 +11,7 @@ import { api, stages, statusLabels, submit } from "../../api";
 import { usePreferences } from "../../preferences";
 import { editingStyles, SelectField } from "../../render-options";
 import ThumbnailEditor from "./thumbnail-editor";
+import { formatSourceTimestamp } from "../../source-range-options";
 
 const terminal = new Set(["complete", "failed", "cancelled", "deleting"]);
 const descriptionTargets = [["social", "General social"], ["youtube", "YouTube"], ["instagram", "Instagram Reels"], ["tiktok", "TikTok"]];
@@ -297,6 +298,9 @@ export default function RenderDetails({ id }) {
                 complete ? reel ? "Your highlight reel is ready" : "Your clips are ready" :
                 reel ? "Creating your highlight reel" : "Creating your clips"}</h1>
               <p>{complete ? reel ? `${formatTime(job.clips[0]?.end_time || 0)} runtime` : countLabel : selection} · {job.aspect_ratio} · {job.source_name || `${job.quality}p`}{!reel && job.editing_style && ` · ${editingStyles[job.editing_style]?.[0]}`}</p>
+              {job.source_start_ms != null && job.source_end_ms != null && <p>
+                Source range {formatSourceTimestamp(job.source_start_ms)}–{formatSourceTimestamp(job.source_end_ms)}
+              </p>}
               {job.source_render_id && <Link className="render-source-link" href={`/jobs/${job.source_render_id}`}>View source render</Link>}
             </div>
           </div>

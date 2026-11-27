@@ -117,6 +117,8 @@ class Job(models.Model):
     caption_style = models.CharField(max_length=9, choices=CAPTION_STYLES, default="off")
     min_clip_seconds = models.PositiveSmallIntegerField(null=True, blank=True)
     max_clip_seconds = models.PositiveSmallIntegerField(null=True, blank=True)
+    source_start_ms = models.PositiveBigIntegerField(null=True, blank=True)
+    source_end_ms = models.PositiveBigIntegerField(null=True, blank=True)
     status = models.CharField(max_length=12, choices=Status, default=Status.QUEUED, db_index=True)
     stage = models.CharField(max_length=12, default="queue")
     progress = models.PositiveSmallIntegerField(default=0)

@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 from typing import Callable, Optional
 
 from ..url_validation import validate_youtube_url
+from .sections import extract_section
 
 
 def _import_ytdlp():
@@ -69,6 +70,24 @@ def cached_download(out_dir, video_id: str) -> Optional[Path]:
         except OSError:
             continue
     return None
+
+
+def cached_youtube_source(video_url, out_dir):
+    return cached_download(out_dir, _extract_youtube_video_id(video_url) or "")
+
+
+def download_youtube_section(video_url, *, out_dir, fmt, source_range, on_progress=None):
+    video_url = validate_youtube_url(video_url)
+    video_id = _extract_youtube_video_id(video_url)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id or ""):
+        raise ValueError("Choose an individual YouTube video.")
+    start_ms, end_ms = source_range
+    cache = Path(out_dir) / f"section-{video_id}-{fmt}-{start_ms}-{end_ms}.mp4"
+    if cache.is_file() and cache.stat().st_size > 0:
+        return str(cache), start_ms / 1000, end_ms / 1000
+    _, start, end = extract_section(video_url, cache, source_range, extractors=("youtube",), quality=fmt,
+                                    on_progress=on_progress)
+    return str(cache), start, end
 
 
 def download_youtube_local(

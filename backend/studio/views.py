@@ -74,6 +74,7 @@ def render_data(job, *, include_activity=True):
         "clip_count": job.clip_count, "aspect_ratio": job.aspect_ratio, "quality": job.quality,
         "framing": job.framing, "caption_style": job.caption_style, "language": job.language,
         "min_clip_seconds": job.min_clip_seconds, "max_clip_seconds": job.max_clip_seconds,
+        "source_start_ms": job.source_start_ms, "source_end_ms": job.source_end_ms,
         "status": job.status, "stage": job.stage, "progress": job.progress,
         "created_at": job.created_at.isoformat(), "error": job.error, "clips": clips,
         "activity": job.activity,
@@ -403,6 +404,8 @@ def create_alternate(request, job):
     mode = StudioMode.alternate(job.studio_mode)
     defaults = preference_values(saved_preferences(job.owner), RENDER_OPTIONS) | {
         "studio_mode": mode, "quality": job.quality, "language": job.language, "caption_style": job.caption_style,
+        "source_start": f"{job.source_start_ms / 1000:.3f}" if job.source_start_ms is not None else "",
+        "source_end": f"{job.source_end_ms / 1000:.3f}" if job.source_end_ms is not None else "",
     }
     data, error = form_data(request, AlternateRenderForm, defaults=defaults)
     if error is not None:
@@ -627,14 +630,14 @@ class VideoByteRange:
         self.handle.close()
 
 
-def range_response(request, path):
+def range_response(request, path, content_type="video/mp4"):
     size = path.stat().st_size
     headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
     requested = request.headers.get("Range")
     if not requested:
         if request.method == "HEAD":
-            return HttpResponse(content_type="video/mp4", headers=headers)
-        return FileResponse(path.open("rb"), content_type="video/mp4", headers=headers)
+            return HttpResponse(content_type=content_type, headers=headers)
+        return FileResponse(path.open("rb"), content_type=content_type, headers=headers)
 
     match = re.fullmatch(r"bytes=([0-9]{0,19})-([0-9]{0,19})", requested)
     if match and any(match.groups()):
@@ -645,10 +648,10 @@ def range_response(request, path):
             headers["Content-Range"] = f"bytes {start}-{end}/{size}"
             headers["Content-Length"] = str(end - start + 1)
             if request.method == "HEAD":
-                return HttpResponse(status=206, content_type="video/mp4", headers=headers)
+                return HttpResponse(status=206, content_type=content_type, headers=headers)
             return StreamingHttpResponse(
                 VideoByteRange(path, start, end - start + 1), status=206,
-                content_type="video/mp4", headers=headers,
+                content_type=content_type, headers=headers,
             )
     return HttpResponse(status=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
 

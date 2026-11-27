@@ -10,10 +10,21 @@ class Download(models.Model):
         CANCELLING = "cancelling", "Stopping"
         CANCELLED = "cancelled", "Cancelled"
         COMPLETE = "complete", "Ready"
+        PARTIAL = "partial", "Partially ready"
         FAILED = "failed", "Failed"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.UUIDField(db_index=True)
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="items")
+    position = models.PositiveIntegerField(null=True, blank=True)
+    is_playlist = models.BooleanField(default=False)
+    playlist_start = models.PositiveIntegerField(default=1)
+    playlist_end = models.PositiveIntegerField(null=True, blank=True)
+    playlist_limited = models.BooleanField(default=False)
+    source_start_ms = models.PositiveBigIntegerField(null=True, blank=True)
+    source_end_ms = models.PositiveBigIntegerField(null=True, blank=True)
+    output = models.CharField(max_length=5, default="video")
+    audio_bitrate = models.PositiveSmallIntegerField(default=192)
     source_url = models.URLField(max_length=600)
     platform = models.CharField(max_length=20)
     quality = models.CharField(max_length=4)

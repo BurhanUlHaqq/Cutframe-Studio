@@ -1,15 +1,18 @@
 """Ingest, transcribe, rank, and render shorts on the local machine."""
+import subprocess
 from pathlib import Path
 from shutil import which
+from tempfile import TemporaryDirectory
 from typing import Callable, Dict, List, Optional
 
 from .highlights import get_highlights
 from .local.clipper import crop_highlights_local
-from .local.downloader import download_youtube_local
+from .local.downloader import cached_youtube_source, download_youtube_local, download_youtube_section
 from .local.gameplay import select_gameplay
 from .local.llm import PROVIDERS, RankingConfig, ranking_client, ranking_config
-from .local.media import validate_local_video
+from .local.media import InvalidSourceVideo, cut_subclip, resolve_source_range, validate_local_video
 from .local.transcriber import transcribe_local
+from .timestamps import source_timestamp
 
 
 class NoMatchingHighlights(ValueError):
@@ -48,6 +51,45 @@ def prepare_source(youtube_url, uploaded_video, download_format, out_dir, report
     )
 
 
+def prepare_bounded_source(youtube_url, uploaded_video, quality, source_range, out_dir, report):
+    local_source = uploaded_video if uploaded_video is not None else cached_youtube_source(youtube_url, out_dir)
+    if local_source is not None:
+        return prepare_source_range(local_source, source_range, out_dir, report)
+    report("download", 5, "Finding the selected section on YouTube")
+    return download_youtube_section(
+        youtube_url, out_dir=out_dir, fmt=quality, source_range=source_range,
+        on_progress=lambda received, portion: report(
+            "download", 5 + int(20 * portion),
+            f"Downloading selected section · {received / 1024**2:.1f} MB received", event=False,
+        ),
+    )
+
+
+def prepare_source_range(source, source_range, out_dir, report):
+    source = Path(source)
+    duration, _, _ = validate_local_video(source, require_audio=False)
+    start_ms, end_ms = source_range
+    start, end = resolve_source_range(duration, start_ms, end_ms)
+    stamp = source.stat()
+    directory = Path(out_dir)
+    bounded = directory / f"range-{start_ms}-{end_ms}-{stamp.st_size:x}-{stamp.st_mtime_ns:x}.mp4"
+    label = f"{source_timestamp(start_ms)}–{source_timestamp(end_ms)}"
+    if bounded.is_file():
+        report("download", 25, f"Reusing the saved source range · {label}")
+        return str(bounded), start, end
+    directory.mkdir(parents=True, exist_ok=True)
+    report("download", 25, f"Cutting the source range · {label}")
+    with TemporaryDirectory(prefix=".range-", dir=directory) as temporary:
+        pending = Path(temporary) / "range.mp4"
+        try:
+            cut_subclip(str(source), start, end, str(pending))
+            validate_local_video(pending, require_audio=False)
+        except (subprocess.CalledProcessError, InvalidSourceVideo) as exc:
+            raise InvalidSourceVideo("Could not cut a playable source range. Check the timestamps or choose a longer range.") from exc
+        pending.replace(bounded)
+    return str(bounded), start, end
+
+
 def transcribe_source(source_path, language, out_dir, caption_style, whisper_model, report, *, transcription=None):
     report("transcribe", 28, "Preparing audio and the local Whisper model")
     return transcribe_local(
@@ -60,6 +102,33 @@ def transcribe_source(source_path, language, out_dir, caption_style, whisper_mod
             f"Transcribing speech · {_clock(done)} of {_clock(total)}", event=False,
         ),
     )
+
+
+def render_timestamp_clip(bounded, start, end, source_range, out_dir, source_name, aspect_ratio, framing,
+                          caption_style, editing_style, language, whisper_model, transcription, report):
+    _, has_audio, _ = validate_local_video(Path(bounded), require_audio=False)
+    report("download", 26, "The selected source range is ready")
+    if has_audio and caption_style != "off":
+        segments = transcribe_source(bounded, language, out_dir, caption_style, whisper_model, report,
+                                     transcription=transcription)["segments"]
+    else:
+        segments = []
+        report("transcribe", 54, "Transcription skipped")
+    report("rank", 69, "Using the supplied timestamps")
+    label = f"{source_timestamp(source_range[0])}–{source_timestamp(source_range[1])}"
+    title = f"{Path(source_name).stem[:140]} | {label}" if source_name else f"Clip {label}"
+    clips = crop_highlights_local(
+        bounded, [{"title": title, "description": f"Source clip from {label}.",
+                   "start_time": 0, "end_time": end - start, "score": None}],
+        out_dir=out_dir, aspect_ratio=aspect_ratio, framing=framing, caption_style=caption_style,
+        editing_style=editing_style, segments=segments, exact=True,
+        on_activity=lambda index, total, message, portion, event: report(
+            "render", 70 + int(19 * portion), message, event=event,
+        ),
+    )
+    for clip in clips:
+        clip.update(start_time=start, end_time=end)
+    return clips
 
 
 def generate_shorts(
@@ -80,16 +149,24 @@ def generate_shorts(
     download_format: str = "720",
     language: Optional[str] = None,
     on_progress: Optional[Callable[..., None]] = None,
+    source_range: tuple[int, int] | None = None,
+    source_name: str = "",
 ) -> List[Dict]:
     """Render ranked highlights by count or score from a URL or an uploaded video."""
     gameplay = editing_style == "gameplay"
-    if not gameplay:
+    if not gameplay and source_range is None:
         ranking = ranking or ranking_config()
         ranking.validate()
     if which("ffmpeg") is None:
         raise RuntimeError("FFmpeg is required to render shorts. Install it and add it to your PATH.")
 
     report = progress_reporter(on_progress)
+    if source_range is not None:
+        bounded, start, end = prepare_bounded_source(youtube_url, uploaded_video, download_format, source_range, out_dir, report)
+        return render_timestamp_clip(
+            bounded, start, end, source_range, out_dir, source_name, aspect_ratio, framing, caption_style,
+            editing_style, language, whisper_model, transcription, report,
+        )
     source_path = prepare_source(youtube_url, uploaded_video, download_format, out_dir, report)
     if gameplay:
         duration, has_audio, _ = validate_local_video(Path(source_path), require_audio=False)

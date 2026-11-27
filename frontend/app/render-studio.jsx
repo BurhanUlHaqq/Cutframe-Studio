@@ -9,6 +9,7 @@ import {
 import { api, statusLabels, submit, submitUpload } from "./api";
 import { usePreferences } from "./preferences";
 import RenderOptions, { editingStyles, HighlightOptions } from "./render-options";
+import SourceRangeOptions, { formatSourceTimestamp } from "./source-range-options";
 
 const modes = [
   ["shorts", Film, "Short Clips", "A pack of standalone clips"],
@@ -48,9 +49,11 @@ export default function RenderStudio({ reuseId = "" }) {
   const { theme, show_scores, ...renderOptions } = { ...preferences, ...(original && {
     studio_mode: original.studio_mode === "highlights" ? "shorts" : "highlights",
     quality: original.quality, language: original.language ?? preferences.language ?? "", caption_style: original.caption_style,
+    source_start: formatSourceTimestamp(original.source_start_ms), source_end: formatSourceTimestamp(original.source_end_ms),
   }), ...overrides };
-  const { studio_mode, highlight_minutes, highlight_method, quality, language, caption_style } = renderOptions;
+  const { studio_mode, highlight_minutes, highlight_method, quality, language, caption_style, source_start, source_end } = renderOptions;
   const highlights = studio_mode === "highlights";
+  const exact = !highlights && Boolean(source_start?.trim() || source_end?.trim());
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
@@ -127,8 +130,9 @@ export default function RenderStudio({ reuseId = "" }) {
     setSending(true);
     setUploadPercent(null);
     try {
-      const options = highlights ? { studio_mode, highlight_minutes, highlight_method, quality, language, caption_style }
-        : { ...renderOptions, highlight_minutes: preferences.highlight_minutes };
+      const options = highlights ? { studio_mode, highlight_minutes, highlight_method, quality, language, caption_style,
+        source_start, source_end } : { ...renderOptions, highlight_minutes: preferences.highlight_minutes };
+      if (exact) Object.assign(options, { selection_mode: "count", clip_count: 1, min_clip_seconds: null, max_clip_seconds: null });
       const job = reuseId ? await submit(`jobs/${reuseId}/alternate/`, options) : await (
         sourceType === "upload" ? submitUpload(video, options, setUploadPercent) : submit("jobs/", { source_url: source.trim(), ...options })
       );
@@ -235,8 +239,9 @@ export default function RenderStudio({ reuseId = "" }) {
             </div>}
             <fieldset className="control-group" disabled={preferencesLoading || sending}>
               <legend className="sr-only">Render options</legend>
+              <SourceRangeOptions value={renderOptions} onChange={changeOptions} highlights={highlights} errors={errors} />
               {highlights ? <HighlightOptions value={renderOptions} onChange={changeOptions} showShared /> :
-                <RenderOptions value={renderOptions} onChange={changeOptions} compact showQuality={youtube} />}
+                <RenderOptions value={renderOptions} onChange={changeOptions} exact={exact} compact showQuality={youtube} />}
             </fieldset>
           </form>
         </section>
@@ -248,8 +253,8 @@ export default function RenderStudio({ reuseId = "" }) {
           </div>
           <div className="studio-export-format">
             <Film size={20} aria-hidden="true" />
-            <div><strong>{highlights ? "Landscape highlight reel" : `${editingStyles[renderOptions.editing_style]?.[0] || "Balanced"} clip pack`}</strong>
-              <p>{[highlights ? "16:9" : renderOptions.aspect_ratio, outputLabel(renderOptions),
+            <div><strong>{highlights ? "Landscape highlight reel" : exact ? "Timestamp clip" : `${editingStyles[renderOptions.editing_style]?.[0] || "Balanced"} clip pack`}</strong>
+              <p>{[highlights ? "16:9" : renderOptions.aspect_ratio, exact ? "1 clip" : outputLabel(renderOptions),
                 (youtube || highlights) && `${quality}p`].filter(Boolean).join(" · ")}</p></div>
           </div>
           <ul className="studio-export-files" aria-label="Included in the ZIP">
@@ -259,7 +264,7 @@ export default function RenderStudio({ reuseId = "" }) {
           </ul>
           <div className="studio-submit">
             {message && <p role="alert" className="field-error">{message}</p>}
-            {Object.entries(errors).filter(([field]) => !["source_url", "video"].includes(field)).map(([field, issues]) => (
+            {Object.entries(errors).filter(([field]) => !["source_url", "video", "source_start", "source_end"].includes(field)).map(([field, issues]) => (
               <p role="alert" className="field-error" key={field}>{issues[0].message}</p>
             ))}
             {sending && !original && !youtube && <progress className="upload-progress" max={100}
@@ -268,7 +273,7 @@ export default function RenderStudio({ reuseId = "" }) {
               disabled={sending || preferencesLoading || (original && !original.can_reuse_source)}>
               <Sparkles size={19} aria-hidden="true" /> {sending
                 ? (!original && !youtube && uploadPercent !== 100 ? `Uploading${uploadPercent === null ? "…" : ` ${uploadPercent}%`}` : "Queuing render…")
-                : highlights ? "Generate highlights" : "Generate clips"}
+                : highlights ? "Generate highlights" : exact ? "Cut clip" : "Generate clips"}
             </button>
           </div>
         </aside>

@@ -11,6 +11,7 @@ from ..control import RenderCancelled
 from ..edit_styles import STYLES
 from ..publication import speech_for_description
 from .captions import Cue, build_edited_cues, write_ass, write_srt
+from .media import cut_subclip
 from .pacing import Pace, plan_pacing, tighten_clip
 from .reframe import Framer
 from .thumbnails import create_thumbnail_set, write_thumbnail
@@ -23,24 +24,6 @@ def _ratio(aspect_ratio: str) -> float:
     except (ValueError, ZeroDivisionError):
         return 9.0 / 16.0
     return ratio if 0 < ratio < float("inf") else 9.0 / 16.0
-
-
-def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> str:
-    """Seek to the requested start, then re-encode an accurate cut with audio."""
-    source_path = os.path.abspath(os.path.expanduser(source_path))
-    out_path = os.path.abspath(os.path.expanduser(out_path))
-    cmd = [
-        "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
-        "-ss", f"{start:.3f}",
-        "-protocol_whitelist", "file", "-i", source_path,
-        "-t", f"{end - start:.3f}",
-        "-map", "0:V:0", "-map", "0:a:0?",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "128k",
-        out_path,
-    ]
-    subprocess.run(cmd, check=True)
-    return out_path
 
 
 def _render_frames(
@@ -159,16 +142,18 @@ def crop_clip_local(
     on_activity: Optional[Callable[[str, float, bool], None]] = None,
     editing_style: str = "balanced",
     pace: Optional[Pace] = None,
+    already_cut: bool = False,
 ) -> str:
     """Cut + reframe one highlight, returning the local mp4 path."""
     out_path = str(Path(out_path).resolve())
     with TemporaryDirectory(prefix=".clip-", dir=Path(out_path).parent) as directory:
         path = Path(directory)
-        cut_path = str(path / "cut.mp4")
+        cut_path = source_path if already_cut else str(path / "cut.mp4")
         silent_path = str(path / "silent.mp4")
-        if on_activity is not None:
-            on_activity("Cutting the source segment", 0, True)
-        _cut_subclip(source_path, start_time, end_time, cut_path)
+        if not already_cut:
+            if on_activity is not None:
+                on_activity("Cutting the source segment", 0, True)
+            cut_subclip(source_path, start_time, end_time, cut_path)
         if pace and pace.removed:
             if on_activity is not None:
                 on_activity(f"Tightening {len(pace.removed)} verified pauses", 0.10, True)
@@ -215,6 +200,7 @@ def crop_highlights_local(
     on_activity: Optional[Callable[[int, int, str, float, bool], None]] = None,
     editing_style: str = "balanced",
     minimum_duration: Optional[int] = None,
+    exact: bool = False,
 ) -> List[Dict]:
     out_dir = os.path.abspath(out_dir)
     os.makedirs(out_dir, exist_ok=True)
@@ -226,7 +212,7 @@ def crop_highlights_local(
         print(f"[clip/local] {i}/{len(highlights)}: {h.get('title', '(untitled)')}", flush=True)
         try:
             start, end = float(h["start_time"]), float(h["end_time"])
-            pace = plan_pacing(source_path, segments or [], start, end, profile, minimum_duration)
+            pace = Pace(end - start) if exact else plan_pacing(source_path, segments or [], start, end, profile, minimum_duration)
             cues = build_edited_cues(segments or [], start, pace, editing_style) if caption_style != "off" else []
             thumbnail_path = Path(out_path).with_suffix(".jpg")
             result = {**h, "clip_url": out_path, "thumbnail_path": str(thumbnail_path)}
@@ -249,7 +235,7 @@ def crop_highlights_local(
             crop_clip_local(
                 source_path, start, end, aspect_ratio, out_path, framing=framing,
                 cues=cues, caption_style=caption_style, on_thumbnail=prepare_cover,
-                on_activity=update, editing_style=editing_style, pace=pace,
+                on_activity=update, editing_style=editing_style, pace=pace, already_cut=exact,
             )
             if cues:
                 caption_path = Path(out_path).with_suffix(".srt")

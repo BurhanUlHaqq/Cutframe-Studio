@@ -130,7 +130,7 @@ function EditingStylePicker({ value, onChange }) {
   );
 }
 
-export default function RenderOptions({ value, onChange, compact = false, showQuality = true }) {
+export default function RenderOptions({ value, onChange, compact = false, showQuality = true, exact = false }) {
   const id = useId();
   const { clip_count: count, aspect_ratio: ratio, quality, framing, caption_style } = value;
   const language = value.language ?? "";
@@ -145,12 +145,12 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
 
   return (
     <>
-      <div className="clip-selection">
+      {!exact && <div className="clip-selection">
         <SelectField label="Clip selection" value={selection_mode} choices={gameplay ? gameplaySelection : selectionModes}
           onChange={(next) => onChange({ selection_mode: next, min_viral_score: min_viral_score ?? 80 })} />
-      </div>
-      <div className="options">
-        {byScore ? (
+      </div>}
+      {(!exact || showQuality) && <div className="options">
+        {exact ? null : byScore ? (
           <div>
             <label htmlFor={`${id}-viral-score`}>{gameplay ? "Minimum activity score" : "Minimum viral score"}</label>
             <div className="input-wrap number-with-unit">
@@ -174,8 +174,8 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
         )}
         {showQuality && <SelectField label="Source quality" value={quality} choices={qualities}
           onChange={(next) => onChange({ quality: next })} />}
-      </div>
-      {byScore && <small className="selection-hint" id={`${id}-viral-hint`}>{gameplay
+      </div>}
+      {!exact && byScore && <small className="selection-hint" id={`${id}-viral-hint`}>{gameplay
         ? "Activity scores come from on-screen motion and changes in audio."
         : "Keeps every ranked highlight at or above this score."}</small>}
       <fieldset className="ratio-field">
@@ -192,7 +192,7 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
         </div>
       </fieldset>
       <EditingStylePicker value={style} onChange={(editing_style) => onChange({ editing_style })} />
-      <fieldset className="length-field">
+      {!exact && <fieldset className="length-field">
         <legend>Clip length</legend>
         <div className="options length-options">
           {[["min_clip_seconds", "Minimum", min_clip_seconds], ["max_clip_seconds", "Maximum", max_clip_seconds]]
@@ -209,7 +209,7 @@ export default function RenderOptions({ value, onChange, compact = false, showQu
             ))}
         </div>
         <small id={`${id}-length-hint`}>Leave both blank for automatic length.</small>
-      </fieldset>
+      </fieldset>}
       <div className="options production-options">
         <SelectField label="Framing" value={framing} choices={framings}
           onChange={(next) => onChange({ framing: next })} />

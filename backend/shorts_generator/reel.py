@@ -13,7 +13,7 @@ from .highlights import build_transcript_text, parse_model_json
 from .local.llm import PROVIDERS, RankingConfigurationError, ranking_client
 from .local.media import validate_local_video
 from .local.reel import render_reel
-from .pipeline import NoMatchingHighlights, prepare_source, progress_reporter, transcribe_source
+from .pipeline import NoMatchingHighlights, prepare_bounded_source, prepare_source, progress_reporter, transcribe_source
 from .publication import normalize_hashtags, speech_for_description
 
 
@@ -211,11 +211,16 @@ def choose_moments(candidates, duration, budget):
 
 def generate_highlight_reel(youtube_url, *, out_dir, minutes, method, uploaded_video=None, ranking=None,
                             whisper_model=None, quality="720", language=None, caption_style="classic",
-                            source_name="", on_progress=None, transcription=None):
+                            source_name="", on_progress=None, transcription=None, source_range=None):
     if which("ffmpeg") is None:
         raise RuntimeError("FFmpeg is required to assemble highlights.")
     report = progress_reporter(on_progress)
-    source = Path(prepare_source(youtube_url, uploaded_video, quality, out_dir, report))
+    source_offset = 0
+    if source_range is None:
+        selected = prepare_source(youtube_url, uploaded_video, quality, out_dir, report)
+    else:
+        selected, source_offset, _ = prepare_bounded_source(youtube_url, uploaded_video, quality, source_range, out_dir, report)
+    source = Path(selected)
     duration, has_audio, video_stream = validate_local_video(source, require_audio=False)
     report("download", 26, "Source video is ready")
     budget = min(1800, minutes * 60, duration if duration <= 30 else duration * 0.9)
@@ -263,6 +268,9 @@ def generate_highlight_reel(youtube_url, *, out_dir, minutes, method, uploaded_v
         description += "\n\n" + " · ".join(named_moments[:5])
     result = render_reel(source, Path(out_dir), moments, segments, quality, caption_style, has_audio,
                          video_stream, title, description, strongest, report)
+    if source_offset:
+        for chapter in result["chapters"]:
+            chapter["source_time"] += source_offset
     result["highlight_review"] = review_method
     result["hashtags"] = normalize_hashtags([
         tag for moment in sorted(moments, key=lambda moment: moment.score, reverse=True) for tag in moment.hashtags

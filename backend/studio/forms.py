@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 from django import forms
 
 from shorts_generator.local.cover_design import ACCENTS, clean_headline
+from shorts_generator.timestamps import parse_source_timestamp
 from shorts_generator.url_validation import validate_youtube_url
 
 from .models import (
@@ -50,11 +51,42 @@ class PreferencesForm(RenderOptionsForm):
     )
 
 
-class JobForm(RenderOptionsForm):
-    source_url = forms.CharField(max_length=2048)
+class SourceTimestampField(forms.CharField):
+    def __init__(self):
+        super().__init__(max_length=24, required=False)
+
+    def clean(self, value):
+        value = super().clean(value)
+        try:
+            return parse_source_timestamp(value)
+        except ValueError as exc:
+            raise forms.ValidationError(str(exc)) from exc
+
+
+class RenderJobForm(RenderOptionsForm):
+    source_start = SourceTimestampField()
+    source_end = SourceTimestampField()
 
     def clean(self):
-        return highlight_job_options(super().clean())
+        data = super().clean()
+        start, end = data.pop("source_start", None), data.pop("source_end", None)
+        if "source_start" not in self.errors and "source_end" not in self.errors:
+            if start is None and end is not None:
+                self.add_error("source_start", "Enter a start time for this source range.")
+            elif end is None and start is not None:
+                self.add_error("source_end", "Enter an end time for this source range.")
+            elif start is not None and end <= start:
+                self.add_error("source_end", "The end time must be after the start time.")
+        data.update(source_start_ms=start, source_end_ms=end)
+        if data.get("studio_mode") == StudioMode.HIGHLIGHTS:
+            data.update(aspect_ratio="16:9", editing_style="balanced")
+        if data.get("studio_mode") == StudioMode.HIGHLIGHTS or (start is not None and end is not None):
+            data.update(clip_count=1, selection_mode=ClipSelection.COUNT, min_clip_seconds=None, max_clip_seconds=None)
+        return data
+
+
+class JobForm(RenderJobForm):
+    source_url = forms.CharField(max_length=2048)
 
     def clean_source_url(self):
         try:
@@ -94,15 +126,12 @@ class ThumbnailDesignForm(forms.Form):
         return clean_headline(self.cleaned_data["headline"])
 
 
-class UploadJobForm(RenderOptionsForm):
+class UploadJobForm(RenderJobForm):
     video = forms.FileField(max_length=255)
 
     def __init__(self, *args, max_upload_bytes=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_upload_bytes = max_upload_bytes
-
-    def clean(self):
-        return highlight_job_options(super().clean())
 
     def clean_video(self):
         video = self.cleaned_data["video"]
@@ -113,16 +142,8 @@ class UploadJobForm(RenderOptionsForm):
         return video
 
 
-def highlight_job_options(data):
-    if data.get("studio_mode") == StudioMode.HIGHLIGHTS:
-        data.update(aspect_ratio="16:9", clip_count=1, selection_mode=ClipSelection.COUNT, editing_style="balanced",
-                    min_clip_seconds=None, max_clip_seconds=None)
-    return data
-
-
-class AlternateRenderForm(RenderOptionsForm):
-    def clean(self):
-        return highlight_job_options(super().clean())
+class AlternateRenderForm(RenderJobForm):
+    pass
 
 
 class StorageSettingsForm(forms.Form):

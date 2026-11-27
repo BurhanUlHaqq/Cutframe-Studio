@@ -58,6 +58,8 @@ Verify the settings in the browser. You can archive the old file outside the pro
 
 For Short Clips, choose **By clip count** to render up to a set number or **By viral score** to keep ranked highlights that meet your minimum. Gameplay uses an activity score based on motion and audio changes. Set a minimum or maximum clip length in seconds, or leave both blank for automatic timing. Choose the editing style, aspect ratio, framing, caption style, and transcription language per render. Save your usual choices in **Settings → Render defaults**, including the default mode and Highlights runtime cap.
 
+Under **Advanced options**, enter **Start time** and **End time** to use a section of a long video. Enter a clock time such as `1:10:00` or seconds such as `4200.5`. **Short Clips** cuts one clip at those timestamps with your chosen framing and captions. **Highlights** looks for moments only within the range. Both use the original source timeline. For remote links, timestamp mode requests the selected section from a seekable source. Uploaded or previously saved video can be cut locally. Leave both fields blank to process the full video.
+
 The uploader accepts MP4, MOV, M4V, MKV, WebM, AVI, MPEG, and MPEG transport stream files. Change the default 2 GiB limit in **Settings → Storage**. Speech-based Short Clips styles require an audio track. Gameplay and Highlights can use silent footage.
 
 The render page shows the worker's current action and estimated progress. Open **Render activity** for worker updates. You can leave the page and return through the Library. **Cancel render** stops queued work immediately and running work at the next checkpoint. An AI request already in progress can take a moment to finish. Retry reuses the uploaded source and can reuse completed videos and matching AI covers if export was interrupted.
@@ -66,9 +68,13 @@ Open a Short Clips render and choose **Create a highlight reel**, or open a High
 
 ## Download videos
 
-Open **Downloader** in the sidebar to save original videos without starting a render. Paste one link per line, choose a resolution preference, and select **Download video**. Use **Save video** when the file is ready. Download history is private to the workspace and remains available when you close the page. You can stop an active download, retry a stopped or failed one, or delete a saved file from Cutframe.
+Open **Downloader** in the sidebar to save media without starting a render. Paste one link per line and choose **Video** or **MP3 audio**. Video preferences range from 144p to 8K, and the saved file shows its actual dimensions. The downloader keeps the source quality and muxes separate video and audio streams when required. MP3 encoding offers 128, 192, 256, and 320 kbps. Under **Advanced options**, enter a start and end time to save just that section from a seekable individual video as video or MP3. Cutframe reads the required media bytes and the headers and keyframes needed for the cut. Sources that cannot serve a partial request return an error.
 
-The tool accepts individual public YouTube videos and Shorts, Vimeo videos, Dailymotion videos, TikTok short links and videos, public Instagram reels and video posts, Twitch clips and VODs, and Reddit-hosted videos. It queues up to eight links at a time with a 4 GiB limit for each video. Resolution preferences use the closest source quality. Output stays in the source container or is muxed with its audio without re-encoding, so the extension may vary.
+Paste a public **YouTube playlist**, **Dailymotion playlist**, or **Vimeo showcase** link to queue its entries. **Playlist options** sets a range of up to 100 items. When a YouTube video link contains a playlist parameter, the same options let you choose to download that playlist. Open **View items** to save individual files, or select **Save ZIP** to stream the finished entries as one archive. Stopping a job preserves finished entries, and **Retry unfinished** resumes with the remaining playable links.
+
+Download history is private to the workspace and remains available when you close the page. You can stop, retry, or delete downloads from the history.
+
+The tool accepts individual public YouTube videos and Shorts, Vimeo videos, Dailymotion videos, TikTok short links and videos, public Instagram reels and video posts, Twitch clips and VODs, and Reddit-hosted videos. It queues up to eight links at a time with a 16 GiB limit per item. The video container can vary with the source and codecs.
 
 Some platforms restrict downloads by region, sign-in, or network, and site changes can temporarily affect extraction. Use finished videos you have permission to save. The downloader runs as its own Compose service and stores files under `D:/volumes/Cutframe/downloads`. [yt-dlp supported sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
 

@@ -92,11 +92,12 @@ def finish_cancelled(record):
 def render_source(job, work, options, installation, minimum_score, report):
     stage_alternate_source(job, work, report)
     transcription = transcription_options(options, installation)
+    source_range = (job.source_start_ms, job.source_end_ms) if job.source_end_ms is not None else None
     source_options = {
         "uploaded_video": uploaded_source(job.id) if job.source_name else None,
         "language": job.language or None, "caption_style": job.caption_style,
         "whisper_model": transcription.pop("whisper_model"), "transcription": transcription,
-        "out_dir": str(work), "on_progress": report,
+        "out_dir": str(work), "on_progress": report, "source_range": source_range,
     }
     if job.studio_mode == StudioMode.HIGHLIGHTS:
         ranking = None
@@ -114,7 +115,8 @@ def render_source(job, work, options, installation, minimum_score, report):
         job.source_url, num_clips=job.clip_count, aspect_ratio=job.aspect_ratio,
         min_viral_score=minimum_score, clip_length=(job.min_clip_seconds, job.max_clip_seconds),
         download_format=job.quality, framing=job.framing, editing_style=job.editing_style,
-        ranking=None if job.editing_style == "gameplay" else resolve_ai_options(options, installation), **source_options,
+        ranking=None if source_range or job.editing_style == "gameplay" else resolve_ai_options(options, installation),
+        source_name=job.source_name, **source_options,
     )
 
 
